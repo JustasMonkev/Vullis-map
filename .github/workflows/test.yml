@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -25,6 +27,9 @@ jobs:
         continue-on-error: true
       - run: npm run bake
       - run: npm test
+        env:
+          TEST_ARTIFACTS: test-results
+      - run: npm run benchmark -- --baseline 6c17babd7e5a58adfca97c6d94c4ce01b80b6463
         env:
           TEST_ARTIFACTS: test-results
       - name: Require current shipped overview images
