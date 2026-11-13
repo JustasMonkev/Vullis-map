@@ -96,7 +96,10 @@
           } else if (m.type === 'tile') {
             w.inflight--;
             pending.delete(m.key);
-            if (m.bitmap) cache.set(m.key, { bmp: m.bitmap, used: frameNo });
+            if (m.bitmap) {
+              if (m.key.startsWith(season + '/')) cache.set(m.key, { bmp: m.bitmap, used: frameNo });
+              else m.bitmap.close();                    // finished after a season switch
+            }
             dirty = true;
             pump();
           } else if (m.type === 'blob') {
@@ -146,7 +149,7 @@
   // coarsest first: it is tiny and covers everything
   const loadBakedSeason = (sz) => Promise.all(Object.keys((baked.meta && baked.meta.levels) || {}).map(Number).sort((a, b) => b - a).map((L) => loadBaked(sz, L)));
 
-  let wanted = [];
+  let wanted = [], wantedSet = new Set();
   let lookups = 0;
   function pump() {
     for (const key of wanted) {
@@ -163,7 +166,8 @@
           let bmp = null;
           if (blob) { try { bmp = await createImageBitmap(blob); } catch (e) { bmp = null; } }
           lookups--;
-          if (bmp) { cache.set(key, { bmp, used: frameNo }); store.state.delete(key); dirty = true; }
+          if (bmp && !key.startsWith(season + '/')) { bmp.close(); bmp = null; store.state.delete(key); }
+          else if (bmp) { cache.set(key, { bmp, used: frameNo }); store.state.delete(key); dirty = true; }
           else store.state.set(key, 'miss');
           pump();
         });
@@ -172,23 +176,29 @@
       let best = null;
       for (const w of workers) if (w.inflight < 2 && (!best || w.inflight < best.inflight)) best = w;
       if (!best) return;
-      const [, L, tx, ty] = key.split('/');
+      const [theme, L, tx, ty] = key.split('/');     // the key names its own season
       best.inflight++;
       pending.set(key, best);
-      best.postMessage({ type: 'tile', key, L: +L, tx: +tx, ty: +ty, theme: season, persist: !!store.db });
+      best.postMessage({ type: 'tile', key, L: +L, tx: +tx, ty: +ty, theme, persist: !!store.db });
     }
   }
 
+  // Live tiles (painted or loaded from IndexedDB) are capped at CACHE_MAX. Baked and overview
+  // tiles don't count, and tiles the scheduler still wants are never evicted, so a tile can't
+  // be dropped and immediately requested again.
+  const isLive = (k, v) => !v.baked && +k.split('/')[1] < MAXL - 1;
   function evict() {
-    if (cache.size <= CACHE_MAX) return;
-    const arr = [...cache.entries()].filter(([k]) => !k.endsWith('/keep')).sort((a, b) => a[1].used - b[1].used);
-    for (let i = 0; i < arr.length && cache.size > CACHE_MAX; i++) {
-      const [k, v] = arr[i];
-      if (v.used === frameNo) break;
-      const L = +k.split('/')[1];
-      if (v.baked || L >= MAXL - 1) continue;       // keep the overview levels
+    const live = [];
+    for (const [k, v] of cache) if (isLive(k, v)) live.push([k, v]);
+    let excess = live.length - CACHE_MAX;
+    if (excess <= 0) return;
+    live.sort((a, b) => a[1].used - b[1].used);
+    for (const [k, v] of live) {
+      if (excess <= 0) break;
+      if (v.used === frameNo || wantedSet.has(k)) continue;
       v.bmp.close && v.bmp.close();
       cache.delete(k);
+      excess--;
     }
   }
 
@@ -255,10 +265,14 @@
           if (tx >= R.tx0 && tx <= R.tx1 && ty >= R.ty0 && ty <= R.ty1) continue;
           ring.push([Math.hypot(tx + 0.5 - cx, ty + 0.5 - cy), tileKey(L, tx, ty)]);
         }
-        ring.sort((a, b) => a[0] - b[0]).forEach(([, k]) => out.push(k));
+        // prefetch only as many as the live-tile budget has room for
+        const liveWanted = out.filter((k) => { const kl = +k.split('/')[1]; return !bakedLevel(kl) && kl < MAXL - 1; }).length;
+        const room = Math.max(0, CACHE_MAX - liveWanted - 4);
+        ring.sort((a, b) => a[0] - b[0]).slice(0, room).forEach(([, k]) => out.push(k));
       }
     }
     wanted = out;
+    wantedSet = new Set(out);
     pump();
   }
 
@@ -346,6 +360,10 @@
       pts.push([isoX(r[i], r[i + 1]), isoY(r[i], r[i + 1], zTop)]);
     }
     if (b.box && b.kind !== 'flat') {
+      for (const [e, n] of window.SIL.boxCorners(b.box, 0.6)) {
+        pts.push([isoX(e, n), isoY(e, n, 0)]);
+        pts.push([isoX(e, n), isoY(e, n, b.h)]);
+      }
       const { c, u, l } = b.box;
       for (const s of [-0.5, 0.5]) { const e = c[0] + u[0] * l * s, n = c[1] + u[1] * l * s; pts.push([isoX(e, n), isoY(e, n, b.h + b.rise)]); }
     }
@@ -503,26 +521,36 @@
     const [e, n] = isoToWorld(view.x, view.y);
     return worldToLatLon(META, e, n);
   }
-  function viewHash(withNote) {
+  /* #zoom/lat/lon[/@pinLat,pinLon][/note]. Without "@", the note pin sits at the view centre
+     (what Share produces). After panning away from a note, its own position is kept with "@". */
+  function viewHash(withNote, pin) {
     const [lat, lon] = centerLatLon();
     const z = (Z_OFF + Math.log2(view.s)).toFixed(2);
     let h = `#${z}/${lat.toFixed(5)}/${lon.toFixed(5)}`;
+    if (withNote && pin) h += `/@${pin[0].toFixed(5)},${pin[1].toFixed(5)}`;
     if (withNote) h += '/' + encodeURIComponent(withNote);
     return h;
   }
   function scheduleHash() {
     clearTimeout(hashTimer);
     hashTimer = setTimeout(() => {
-      const h = viewHash(note && note.keep ? note.text : null);
+      const h = note && note.keep ? viewHash(note.text, worldToLatLon(META, note.e, note.n)) : viewHash(null);
       try { history.replaceState(null, '', h); } catch (e) { /* sandboxed */ }
     }, 350);
   }
   function readHash() {
-    const m = decodeURIComponent(location.hash || '').match(/^#(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)(?:\/(.+))?$/);
-    if (!m) return null;
-    const [e, n] = latLonToWorld(META, +m[2], +m[3]);
-    const v = { x: isoX(e, n), y: isoY(e, n, 0), s: Math.pow(2, +m[1] - Z_OFF) };
-    if (m[4]) note = { e, n, text: m[4].slice(0, 140), keep: true };
+    const parts = (location.hash || '').replace(/^#/, '').split('/');
+    const num = /^-?\d+(?:\.\d+)?$/;
+    if (parts.length < 3 || !parts.slice(0, 3).every((p) => num.test(p))) return null;
+    const [z, lat, lon] = parts.slice(0, 3).map(Number);
+    const [e, n] = latLonToWorld(META, lat, lon);
+    const v = { x: isoX(e, n), y: isoY(e, n, 0), s: Math.pow(2, z - Z_OFF) };
+    let rest = parts.slice(3), pe = e, pn = n;
+    const pin = rest.length && rest[0].match(/^@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
+    if (pin) { [pe, pn] = latLonToWorld(META, +pin[1], +pin[2]); rest = rest.slice(1); }
+    let text = rest.join('/');
+    try { text = decodeURIComponent(text); } catch (err) { /* keep it raw */ }
+    note = text.trim() ? { e: pe, n: pn, text: text.slice(0, 140), keep: true } : null;
     return v;
   }
   function updateReadout() {
@@ -533,6 +561,8 @@
     const pin = $('note-pin');
     if (!note) { pin.hidden = true; return; }
     const [x, y] = toScreen(isoX(note.e, note.n), isoY(note.e, note.n, 0));
+    const t = $('note-text');
+    if (t.textContent !== note.text) t.textContent = note.text;
     pin.hidden = false;
     pin.style.left = x + 'px'; pin.style.top = y + 'px';
   }
@@ -721,6 +751,7 @@
   function setSeason(sz) {
     if (!sz || sz === season) return;
     season = sz;
+    wanted = []; wantedSet = new Set();           // nothing from the old season gets requested again
     document.body.dataset.season = sz;
     document.querySelectorAll('.season button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.season === sz)));
     // drop tiles of other seasons, keeping memory in check

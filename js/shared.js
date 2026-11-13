@@ -205,6 +205,12 @@
     return { c, u: U, v: V, l: lu, w: lv };
   }
 
+  // Corners of an oriented box, grown by `pad` metres on every side.
+  function boxCorners(box, pad) {
+    const { c, u, v } = box, hl = box.l / 2 + pad, hw = box.w / 2 + pad;
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [c[0] + u[0] * hl * a + v[0] * hw * b, c[1] + u[1] * hl * a + v[1] * hw * b]);
+  }
+
   /* Turn a raw building record into a render-ready one.
      kind: 'flat' (extruded footprint) | 'gable' | 'hip' | 'church' */
   function prepBuilding(b, i) {
@@ -235,12 +241,19 @@
     }
     // depth: larger = farther from camera (drawn first)
     let dmin = Infinity, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    const grow = (e, nn) => {
+      const X = isoX(e, nn), Y = isoY(e, nn, 0);
+      if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y > y1) y1 = Y; if (Y < y0) y0 = Y;
+    };
     for (let k = 0; k < r.length; k += 2) {
       const e = r[k], nn = r[k + 1];
       const d = e + nn; if (d < dmin) dmin = d;
-      const X = isoX(e, nn), Y = isoY(e, nn, 0);
-      if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y > y1) y1 = Y; if (Y < y0) y0 = Y;
+      grow(e, nn);
     }
+    // Pitched roofs and churches are drawn from their oriented box plus eaves, which can
+    // reach past the footprint: bound what is actually drawn, or tile culling clips it.
+    if (box) for (const [e, nn] of boxCorners(box, 0.6)) grow(e, nn);
+    if (tower) for (const [e, nn] of boxCorners({ c: tower.c, u: [1, 0], v: [0, 1], l: tower.w, w: tower.w }, 0.2)) grow(e, nn);
     y0 -= top * ISO.H + 2;
     const depth = ((c[0] + c[1]) + dmin) / 2;
     return {
@@ -301,10 +314,10 @@
   }
 
   // Bump whenever the renderer or the data changes: browsers drop tiles saved by older versions.
-  const VERSION = 'r2';
+  const VERSION = 'r3';
 
   const api = {
-    VERSION, ISO, isoBoundsOf, levelRange, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
+    VERSION, ISO, isoBoundsOf, levelRange, boxCorners, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
     ringArea, ringCentroid, pointInRing, obb, prepBuilding, Grid, makeSeen,
     worldToLatLon, latLonToWorld, isoToWorld,
   };

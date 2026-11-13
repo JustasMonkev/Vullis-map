@@ -199,6 +199,7 @@ kbd {
   position: absolute; z-index: 2; transform: translate(-50%, calc(-100% - 14px)); pointer-events: none;
   max-width: 240px; padding: 8px 11px; background: var(--yellow); color: #1d2620;
   border: 2px solid #1d2620; box-shadow: 3px 3px 0 #1d2620; font: 600 14px/1.25 var(--f-display); text-align: center;
+  white-space: pre-line; overflow-wrap: anywhere;
 }
 #note-pin::after {
   content: ""; position: absolute; left: 50%; bottom: -12px; margin-left: -6px;
