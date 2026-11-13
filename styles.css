@@ -214,19 +214,94 @@ kbd {
 .loader-box .bar { width: 200px; height: 14px; border: 2px solid var(--line); padding: 2px; }
 .loader-box i { display: block; height: 100%; width: 4%; background: var(--green); transition: width .2s; }
 
-@media (max-width: 640px) {
-  .topbar { flex-direction: column; align-items: stretch; }
-  .brand { align-self: flex-start; }
-  .brand h1 { font-size: 19px; }
-  .tools { width: 100%; }
-  .search { flex: 1; width: auto; }
-  .search kbd { display: none; }
-  .btn.share { padding: 8px 10px; }
-  .readout { display: none; }
-  .attrib { flex-basis: 100%; margin: 0; }
-  .card { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); left: max(16px, env(safe-area-inset-left, 0px)); width: auto; }
-  .controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); }
+/* search extras */
+.search input::-webkit-search-cancel-button, .search input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.search .lens { width: 16px; height: 16px; margin-left: 10px; fill: var(--muted); flex: none; }
+.search .clear {
+  flex: none; width: 32px; height: 32px; margin-right: 4px; border: 0; background: transparent;
+  font: 600 20px/1 var(--f-display); color: var(--muted);
 }
+.search .clear:hover { color: var(--ink); }
+.btn.share span { display: inline; }
+.about-mini { display: none; }
+.btn.wide { width: 100%; justify-content: center; margin-top: 10px; }
+button, a, input, textarea { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+/* card + dialog extras */
+.grip { display: none; }
+.card .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.card .actions .btn { font-size: 14px; padding: 7px 10px; text-decoration: none; }
+
+/* first-visit touch hint */
+#hint {
+  position: fixed; z-index: 7; left: 50%; transform: translateX(-50%);
+  top: calc(env(safe-area-inset-top, 0px) + 74px); width: min(340px, calc(100vw - 32px));
+  padding: 10px 12px; display: flex; gap: 10px; align-items: center;
+}
+#hint p { margin: 0; font-size: 13px; line-height: 1.35; flex: 1; min-width: 0; }
+#hint .btn { font-size: 14px; padding: 6px 10px; flex: none; }
+
+@media (max-width: 640px) {
+  /* one compact row on top: search, dice, share */
+  .topbar { flex-wrap: nowrap; padding-top: calc(env(safe-area-inset-top, 0px) + 10px); }
+  .brand { display: none; }
+  .tools { width: 100%; gap: 8px; }
+  .search { flex: 1; width: auto; min-height: 46px; }
+  .search input { font-size: 16px; padding: 10px 6px 10px 8px; }   /* 16px stops iOS zooming on focus */
+  .search kbd { display: none; }
+  .btn { min-height: 46px; min-width: 46px; justify-content: center; }
+  .btn.share span { display: none; }
+  #results { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 64px); max-height: 55vh; }
+  #results li { min-height: 46px; align-items: center; padding: 8px 14px; }
+
+  .readout { display: none; }
+  .about-mini { display: inline-flex; font-size: 18px; padding: 0; }
+  .season button { min-height: 46px; padding: 0 12px; font-size: 15px; }
+  .bottombar { flex-wrap: nowrap; align-items: flex-end; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); }
+  .bottombar { flex-wrap: wrap; row-gap: 6px; }
+  .attrib .long { display: none; }
+  .attrib { order: -1; flex-basis: 100%; margin: 0; background: none; padding: 0; text-align: left; }
+  .attrib a { background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 1px 4px; }
+
+  .controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 72px); }
+  .zoom button { width: 48px; height: 48px; }
+  body.card-open .controls, body.card-open .bottombar { visibility: hidden; }
+
+  #hint { top: calc(env(safe-area-inset-top, 0px) + 66px); }
+
+  /* building card and dialogs become bottom sheets */
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-width: none;
+    border-left: 0; border-right: 0; border-bottom: 0; box-shadow: 0 -3px 0 var(--shadow);
+    padding: 22px max(18px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 18px) max(18px, env(safe-area-inset-left, 0px));
+    max-height: 78vh; overflow-y: auto; overscroll-behavior: contain;
+    animation: sheet-up .22s ease-out;
+  }
+  /* the grip is a wide, invisible drag strip along the top of the sheet */
+  .grip { display: block; position: absolute; top: 0; left: 0; right: 60px; height: 44px; touch-action: none; }
+  .grip::before { content: ""; position: absolute; top: 8px; left: calc(50% + 30px); width: 44px; height: 5px; margin-left: -22px; background: var(--muted); }
+  .card.sheet { touch-action: none; }
+  .sheet .close { width: 40px; height: 40px; top: 12px; right: max(12px, env(safe-area-inset-right, 0px)); font-size: 20px; }
+  .card h2 { font-size: 21px; }
+  .card dl { grid-template-columns: auto 1fr; }
+  .card .actions .btn { flex: 1; min-height: 46px; font-size: 15px; }
+  .modal { place-items: end stretch; padding: 0; }
+  .dialog { width: 100%; max-height: 85vh; }
+  .dialog textarea, .dialog input { font-size: 16px; }
+  .dialog .row .btn { min-width: 84px; }
+  .keys { grid-template-columns: 1fr; }
+  #toast { bottom: calc(env(safe-area-inset-bottom, 0px) + 80px); }
+}
+@media (hover: hover) and (pointer: fine) { .keys.touch, h3:has(+ .keys.touch) { display: none; } }
+@media (pointer: coarse) { .keys:not(.touch), h3:has(+ .keys:not(.touch)) { display: none; } }
+/* touch screens keep :hover after a tap; don't leave buttons lit up */
+@media (hover: none) {
+  .icon-btn:hover, .zoom button:hover, .season button:hover:not([aria-checked="true"]) { background: transparent; color: inherit; }
+  .btn:hover { background: var(--panel); color: var(--ink); }
+  .btn.share:hover { background: var(--yellow); color: #1d2620; }
+}
+@keyframes sheet-up { from { transform: translateY(40%); opacity: .4; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   #stage, #loader, .loader-box i { transition: none; }
+  .sheet { animation: none; }
 }

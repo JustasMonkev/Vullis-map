@@ -160,7 +160,11 @@
   const levelFor = (s) => Math.max(0, Math.min(MAXL, Math.ceil(Math.log2(1 / (ISO.A0 * s)) - 1e-9)));
 
   // ------------------------------------------------------------ drawing
+  function setPlaceholder() {
+    $('q').placeholder = window.innerWidth > 640 ? 'Search Šilalė: a place, street or address' : 'Search Šilalė';
+  }
   function resize() {
+    setPlaceholder();
     DPR = Math.min(window.devicePixelRatio || 1, 2.5);
     W = window.innerWidth; H = window.innerHeight;
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
@@ -493,18 +497,44 @@
     pin.style.left = x + 'px'; pin.style.top = y + 'px';
   }
 
-  // ------------------------------------------------------------ input
+  // ------------------------------------------------------------ input: mouse, touch, pen
+  /* Gestures:
+     drag = pan (with momentum) · pinch = zoom around the fingers (and pan with them)
+     double-tap / double-click = zoom in · two-finger tap = zoom out
+     tap, then hold and slide up/down = one-handed zoom · tap = building details */
   const pointers = new Map();
-  let drag = null, vel = [0, 0], lastMove = 0, moved = 0, pinch = null;
+  let gesture = null, lastTap = null, inertia = null;
+  const SLOP = 10;
+  const pts = () => [...pointers.values()];
+  const centroid = () => { const p = pts(); return [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2]; };
+  const spread = () => { const p = pts(); return Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]) || 1; };
+  const holdPoint = (anchor, sx, sy) => { view.x = anchor[0] - (sx - W / 2) / view.s; view.y = anchor[1] - (sy - H / 2) / view.s; };
+  function beginPan(x, y, moved) {
+    gesture = { type: 'pan', x, y, x0: x, y0: y, moved: moved || 0, vx: 0, vy: 0, t: performance.now() };
+  }
+  function beginPinch() {
+    const [cx, cy] = centroid();
+    gesture = { type: 'pinch', d0: spread(), s0: view.s, anchor: toIso(cx, cy), t0: performance.now(), change: 0, c0: [cx, cy], moved: 0 };
+  }
+  function zoomToward(sx, sy, f) {        // animated zoom that keeps (sx, sy) under the finger
+    const anchor = toIso(sx, sy);
+    const s = Math.max(S_MIN, Math.min(S_MAX, view.s * f));
+    flyTo({ x: anchor[0] - (sx - W / 2) / s, y: anchor[1] - (sy - H / 2) / s, s }, 320);
+  }
+
   canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
     anim = null; inertia = null;
-    if (pointers.size === 1) { drag = { x: e.clientX, y: e.clientY }; moved = 0; vel = [0, 0]; lastMove = performance.now(); canvas.classList.add('dragging'); }
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: view.s };
-    }
+    hideHint();
+    if (pointers.size === 1) {
+      const now = performance.now();
+      if (lastTap && now - lastTap.t < 330 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+        gesture = { type: 'tapzoom', x: e.clientX, y: e.clientY, s0: view.s, anchor: toIso(e.clientX, e.clientY), moved: 0 };
+      } else beginPan(e.clientX, e.clientY);
+      canvas.classList.add('dragging');
+    } else if (pointers.size === 2) beginPinch();
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) {
@@ -514,54 +544,78 @@
       }
       return;
     }
-    const prev = pointers.get(e.pointerId);
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
-    if (pointers.size === 2 && pinch) {
-      const [a, b] = [...pointers.values()];
-      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-      const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2;
-      const f = (pinch.s * d / pinch.d) / view.s;
-      const dx = e.clientX - prev[0], dy = e.clientY - prev[1];
-      view.x -= dx / 2 / view.s; view.y -= dy / 2 / view.s;
-      zoomAt(cx, cy, f);
-      moved += 10;
+    if (!gesture) return;
+    if (gesture.type === 'pinch' && pointers.size >= 2) {
+      const [cx, cy] = centroid(), d = spread();
+      view.s = Math.max(S_MIN, Math.min(S_MAX, gesture.s0 * d / gesture.d0));
+      holdPoint(gesture.anchor, cx, cy);
+      gesture.change = Math.max(gesture.change, Math.abs(d - gesture.d0));
+      gesture.moved = Math.max(gesture.moved, Math.hypot(cx - gesture.c0[0], cy - gesture.c0[1]));
+      clampView(); dirty = true;
+    } else if (gesture.type === 'tapzoom') {
+      const dy = e.clientY - gesture.y;
+      gesture.moved = Math.max(gesture.moved, Math.abs(dy));
+      if (gesture.moved > SLOP) {
+        view.s = Math.max(S_MIN, Math.min(S_MAX, gesture.s0 * Math.exp(dy * 0.012)));
+        holdPoint(gesture.anchor, gesture.x, gesture.y);
+        clampView(); dirty = true;
+      }
+    } else if (gesture.type === 'pan') {
+      const dx = e.clientX - gesture.x, dy = e.clientY - gesture.y;
+      gesture.x = e.clientX; gesture.y = e.clientY;
+      gesture.moved = Math.max(gesture.moved, Math.hypot(e.clientX - gesture.x0, e.clientY - gesture.y0));
+      const now = performance.now(), dt = Math.max(1, now - gesture.t);
+      gesture.vx = gesture.vx * 0.6 + (dx / dt) * 0.4; gesture.vy = gesture.vy * 0.6 + (dy / dt) * 0.4;
+      gesture.t = now;
+      view.x -= dx / view.s; view.y -= dy / view.s;
+      clampView(); dirty = true;
+    }
+  });
+  const endPointer = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    const g = gesture;
+    if (!g) return;
+    if (g.type === 'pinch') {
+      if (pointers.size === 1) {
+        // a quick two-finger tap zooms out; otherwise carry on panning with the remaining finger
+        if (performance.now() - g.t0 < 300 && g.change < 18 && g.moved < 18) zoomToward(W / 2, H / 2, 1 / 2);
+        const [p] = pts(); beginPan(p[0], p[1], 99);
+      }
+      if (pointers.size === 0) { gesture = null; canvas.classList.remove('dragging'); scheduleHash(); }
       return;
     }
-    if (!drag) return;
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    drag.x = e.clientX; drag.y = e.clientY;
-    moved += Math.abs(dx) + Math.abs(dy);
-    const now = performance.now(), dt = Math.max(1, now - lastMove);
-    vel = [vel[0] * 0.6 + (dx / dt) * 0.4, vel[1] * 0.6 + (dy / dt) * 0.4];
-    lastMove = now;
-    view.x -= dx / view.s; view.y -= dy / view.s;
-    clampView(); dirty = true;
-  });
-  let inertia = null;
-  const endPointer = (e) => {
-    pointers.delete(e.pointerId);
-    if (pointers.size < 2) pinch = null;
-    if (pointers.size === 0) {
-      canvas.classList.remove('dragging');
-      if (drag && moved < 6) onTap(e.clientX, e.clientY);
-      else if (drag && !reduceMotion && performance.now() - lastMove < 80 && Math.hypot(vel[0], vel[1]) > 0.15) inertia = { vx: vel[0], vy: vel[1], t: performance.now() };
-      drag = null;
+    if (pointers.size > 0) return;
+    canvas.classList.remove('dragging');
+    gesture = null;
+    if (g.type === 'tapzoom') {
+      lastTap = null;
+      if (g.moved <= SLOP) zoomToward(g.x, g.y, 2);
+      else scheduleHash();
+      return;
+    }
+    if (g.moved < SLOP) {
+      lastTap = { t: performance.now(), x: e.clientX, y: e.clientY };
+      onTap(e.clientX, e.clientY);
+    } else {
+      lastTap = null;
+      if (!reduceMotion && performance.now() - g.t < 80 && Math.hypot(g.vx, g.vy) > 0.15) inertia = { vx: g.vx, vy: g.vy, t: performance.now() };
       scheduleHash();
-    } else if (pointers.size === 1) {
-      const [p] = [...pointers.values()];
-      drag = { x: p[0], y: p[1] };
     }
   };
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', endPointer);
-  canvas.addEventListener('pointerleave', () => { if (hover >= 0 && !drag) { hover = -1; dirty = true; } });
+  canvas.addEventListener('pointerleave', () => { if (hover >= 0 && !gesture) { hover = -1; dirty = true; } });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     anim = null; inertia = null;
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomAt(e.clientX, e.clientY, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0022)));
   }, { passive: false });
-  canvas.addEventListener('dblclick', (e) => { flyToPoint(toIso(e.clientX, e.clientY), view.s * 2.5); });
+  // Safari's own pinch events would zoom the page instead of the map
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
   (function inertiaLoop() {
     if (inertia) {
       const now = performance.now(), dt = now - inertia.t; inertia.t = now;
@@ -574,6 +628,20 @@
     requestAnimationFrame(inertiaLoop);
   })();
   function flyToPoint([X, Y], s) { flyTo({ x: X, y: Y, s: Math.max(S_MIN, Math.min(S_MAX, s)) }); }
+
+  // first touch visit: a one-time hint about the gestures
+  function hideHint() {
+    const h = $('hint');
+    if (h.hidden) return;
+    h.hidden = true;
+    try { localStorage.setItem('silale-hint', '1'); } catch (e) { /* ignore */ }
+  }
+  function maybeHint() {
+    if (!window.matchMedia('(pointer: coarse)').matches) return;
+    try { if (localStorage.getItem('silale-hint')) return; } catch (e) { /* show it anyway */ }
+    $('hint').hidden = false;
+  }
+  $('hint-ok').onclick = hideHint;
 
   function onTap(sx, sy) {
     const id = pick(sx, sy);
@@ -666,8 +734,57 @@
     const id2 = String(b.osm || '');
     osm.href = id2.startsWith('r') ? `https://www.openstreetmap.org/relation/${id2.slice(1)}` : `https://www.openstreetmap.org/way/${id2}`;
     $('card').hidden = false;
+    document.body.classList.add('card-open');
+    revealBehindCard(b);
   }
-  function hideCard() { if (selected >= 0) { selected = -1; dirty = true; } $('card').hidden = true; }
+  function hideCard() {
+    if (selected >= 0) { selected = -1; dirty = true; }
+    $('card').hidden = true;
+    document.body.classList.remove('card-open');
+  }
+  // On a phone the card covers the lower part of the screen: glide so the building stays visible.
+  function revealBehindCard(b) {
+    if (W > 640) return;
+    requestAnimationFrame(() => {
+      const top = 70, bottom = H - $('card').offsetHeight - 16;
+      const tgt = anim ? anim.target : view;
+      const X = isoX(b.c[0], b.c[1]), Y = isoY(b.c[0], b.c[1], b.h * 0.5);
+      const sy = (Y - tgt.y) * tgt.s + H / 2, sx = (X - tgt.x) * tgt.s + W / 2;
+      if (sy > top + 40 && sy < bottom - 40 && sx > 70 && sx < W - 70) return;
+      const want = (top + bottom) / 2;
+      flyTo({ x: X, y: Y - (want - H / 2) / tgt.s, s: tgt.s }, 420);
+    });
+  }
+  $('card-share').onclick = () => {
+    const b = BLD[selected];
+    if (!b) return;
+    const [lat, lon] = worldToLatLon(META, b.c[0], b.c[1]);
+    shareTarget = { lat, lon, z: Math.max(19, Z_OFF + Math.log2(view.s)) };
+    $('share-note').value = b.name || b.addr || '';
+    $('share-h').textContent = 'Share this place';
+    $('share-link').value = shareUrl();
+    openModal('share');
+  };
+  // swipe a sheet down to close it
+  document.querySelectorAll('.sheet').forEach((sh) => {
+    let y0 = null, dy = 0;
+    sh.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch' || sh.scrollTop > 0 || e.target.closest('input, textarea, a, button')) return;
+      y0 = e.clientY; dy = 0;
+    });
+    sh.addEventListener('pointermove', (e) => {
+      if (y0 === null) return;
+      dy = Math.max(0, e.clientY - y0);
+      sh.style.transform = dy ? `translateY(${dy}px)` : '';
+    });
+    const end = () => {
+      if (y0 === null) return;
+      y0 = null; sh.style.transform = '';
+      if (dy > 70) { if (sh.id === 'card') hideCard(); else closeModals(); }
+    };
+    sh.addEventListener('pointerup', end);
+    sh.addEventListener('pointercancel', end);
+  });
   $('card-close').onclick = hideCard;
 
   // ------------------------------------------------------------ surprise
@@ -741,6 +858,7 @@
   }
   function choose(r) {
     qEl.value = r.label; resEl.hidden = true; qEl.blur(); note = null;
+    $('q-clear').hidden = false;
     if (r.coord) {
       const [e, n] = latLonToWorld(META, r.coord[0], r.coord[1]);
       note = { e, n, text: r.label, keep: false };
@@ -757,7 +875,11 @@
       flyToPoint([isoX(r.e, r.n), isoY(r.e, r.n, 0)], s);
     }
   }
-  qEl.addEventListener('input', () => { results = search(qEl.value); sel = results.length ? 0 : -1; renderResults(); });
+  qEl.addEventListener('input', () => {
+    results = search(qEl.value); sel = results.length ? 0 : -1; renderResults();
+    $('q-clear').hidden = !qEl.value;
+  });
+  $('q-clear').onclick = () => { qEl.value = ''; $('q-clear').hidden = true; results = []; renderResults(); qEl.focus(); };
   qEl.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(results.length - 1, sel + 1); renderResults(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); renderResults(); }
@@ -767,16 +889,42 @@
   qEl.addEventListener('focus', () => { if (qEl.value.trim()) renderResults(); });
 
   // ------------------------------------------------------------ share & about
-  function openModal(id) { $(id).hidden = false; const f = $(id).querySelector('textarea, input, button'); f && f.focus(); }
+  function openModal(id) {
+    $(id).hidden = false;
+    // on touch screens, focusing a field would pop the keyboard over the sheet
+    const f = window.matchMedia('(pointer: coarse)').matches ? $(id).querySelector('.close') : $(id).querySelector('textarea, input, button');
+    f && f.focus();
+  }
   function closeModals() { document.querySelectorAll('.modal').forEach((m) => (m.hidden = true)); }
   document.querySelectorAll('.modal').forEach((m) => {
     m.addEventListener('click', (e) => { if (e.target === m || e.target.closest('[data-close]')) closeModals(); });
   });
+  let shareTarget = null;
   function shareUrl() {
     const base = location.href.split('#')[0];
-    return base + viewHash($('share-note').value.trim() || null);
+    const noteText = $('share-note').value.trim() || null;
+    if (shareTarget) {
+      let h = `#${shareTarget.z.toFixed(2)}/${shareTarget.lat.toFixed(5)}/${shareTarget.lon.toFixed(5)}`;
+      if (noteText) h += '/' + encodeURIComponent(noteText);
+      return base + h;
+    }
+    return base + viewHash(noteText);
   }
-  $('share-btn').onclick = () => { $('share-link').value = shareUrl(); openModal('share'); };
+  $('share-btn').onclick = () => {
+    shareTarget = null;
+    $('share-h').textContent = 'Share this view';
+    $('share-note').value = '';
+    $('share-link').value = shareUrl();
+    openModal('share');
+  };
+  if (navigator.share) {
+    $('send-btn').hidden = false;
+    $('send-btn').onclick = () => {
+      const url = shareUrl();
+      navigator.share({ title: 'Isometric Šilalė', text: $('share-note').value.trim() || 'Šilalė in pixels', url })
+        .catch((err) => { if (err && err.name !== 'AbortError') toast('Copy the link instead'); });
+    };
+  }
   $('share-note').addEventListener('input', () => ($('share-link').value = shareUrl()));
   $('copy-btn').onclick = () => {
     const v = shareUrl();
@@ -787,6 +935,7 @@
     } catch (e) { $('share-link').select(); toast('Press Ctrl+C to copy'); }
   };
   $('about-btn').onclick = () => openModal('about');
+  $('about-btn-2').onclick = () => openModal('about');
   let toastT = 0;
   function toast(msg) {
     const t = $('toast'); t.textContent = msg; t.hidden = false;
@@ -838,9 +987,10 @@
       check();
     });
     $('loader').classList.add('done');
+    setTimeout(maybeHint, 3600);
     setTimeout(() => ($('loader').hidden = true), 600);
     // opening move: glide from the whole diorama down into the town centre
-    if (!fromHash && !reduceMotion) setTimeout(() => { if (!anim && !drag && !inertia) flyTo({ x: 0, y: 0, s: Math.pow(2, 16.7 - Z_OFF) }, 2600); }, 700);
+    if (!fromHash && !reduceMotion) setTimeout(() => { if (!anim && !gesture && !inertia) flyTo({ x: 0, y: 0, s: Math.pow(2, 16.7 - Z_OFF) }, 2600); }, 700);
   }
   boot().catch((err) => {
     console.error(err);

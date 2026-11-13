@@ -16,6 +16,8 @@ yards and field edges. Each tile is snapped to a fixed palette, which gives the 
 - **Summer, Winter and Night** seasons (press `S`): snow and ice, or lit windows and street lamps
 - Search places, streets, addresses (`Nepriklausomybės 8`) or coordinates (`55.49, 22.18`)
 - Click any building to see its name, address, year built and approximate height
+- Phone-friendly: pinch, double-tap to zoom in, two-finger tap to zoom out, tap-hold-slide
+  for one-handed zoom; building details, Share and About open as swipe-down bottom sheets
 - **Surprise me** (`R`), whole town (`H`), and shareable links with an optional note pin.
   Links look like `#19.00/55.49408/22.18031/My%20note`
 
