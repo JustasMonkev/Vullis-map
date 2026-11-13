@@ -475,7 +475,11 @@
     view.x = Math.max(isoBounds[0] - m, Math.min(isoBounds[2] + m, view.x));
     view.y = Math.max(isoBounds[1] - m, Math.min(isoBounds[3] + m, view.y));
   }
+  // Direct zoom (wheel, buttons, keys, pinch). It cancels any glide or momentum, which
+  // would otherwise overwrite the new zoom on the next frame.
+  let userMoved = false;
   function zoomAt(sx, sy, f) {
+    anim = null; inertia = null; userMoved = true;
     const [X, Y] = toIso(sx, sy);
     view.s *= f; clampView();
     const [X2, Y2] = toIso(sx, sy);
@@ -596,7 +600,7 @@
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
-    anim = null; inertia = null;
+    anim = null; inertia = null; userMoved = true;
     hideHint();
     if (pointers.size === 1) {
       const now = performance.now();
@@ -1065,7 +1069,7 @@
     setTimeout(maybeHint, 3600);
     setTimeout(() => ($('loader').hidden = true), 600);
     // opening move: glide from the whole diorama down into the town centre
-    if (!fromHash && !reduceMotion) setTimeout(() => { if (!anim && !gesture && !inertia) flyTo({ x: 0, y: 0, s: Math.pow(2, 16.7 - Z_OFF) }, 2600); }, 700);
+    if (!fromHash && !reduceMotion) setTimeout(() => { if (!anim && !gesture && !inertia && !userMoved) flyTo({ x: 0, y: 0, s: Math.pow(2, 16.7 - Z_OFF) }, 2600); }, 700);
   }
   boot().catch((err) => {
     console.error(err);
