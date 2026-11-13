@@ -289,8 +289,11 @@
     return [(X + s) / 2, (s - X) / 2];
   }
 
+  // Bump whenever the renderer or the data changes: browsers drop tiles saved by older versions.
+  const VERSION = 'r2';
+
   const api = {
-    ISO, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
+    VERSION, ISO, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
     ringArea, ringCentroid, pointInRing, obb, prepBuilding, Grid, makeSeen,
     worldToLatLon, latLonToWorld, isoToWorld,
   };

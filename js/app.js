@@ -25,7 +25,60 @@
   const workers = [];
   const cache = new Map();         // key -> {bmp, used}
   const pending = new Map();       // key -> worker index
-  const CACHE_MAX = 260;
+  const CACHE_MAX = Math.round(110 + 150 * Math.min(1, (navigator.deviceMemory || 4) / 8));
+
+  /* Painted tiles are kept in IndexedDB, so a second visit (or panning back after the
+     memory cache let a tile go) shows them at once. Keys carry the renderer version. */
+  const store = {
+    db: null, state: new Map(),
+    open() {
+      return new Promise((resolve) => {
+        let req;
+        try { req = indexedDB.open('isometric-silale', 1); } catch (e) { resolve(null); return; }
+        req.onupgradeneeded = () => req.result.createObjectStore('tiles');
+        req.onerror = () => resolve(null);
+        req.onblocked = () => resolve(null);
+        req.onsuccess = () => {
+          const db = req.result;
+          try {
+            const tx = db.transaction('tiles', 'readwrite'), os = tx.objectStore('tiles');
+            const vr = os.get('__version');
+            vr.onsuccess = () => {
+              if (vr.result !== window.SIL.VERSION) { os.clear(); os.put(window.SIL.VERSION, '__version'); }
+              else {
+                const cr = os.count();
+                cr.onsuccess = () => { if (cr.result > 6000) { os.clear(); os.put(window.SIL.VERSION, '__version'); } };
+              }
+            };
+            tx.oncomplete = () => { this.db = db; resolve(db); };
+            tx.onerror = () => resolve(null);
+          } catch (e) { resolve(null); }
+        };
+      });
+    },
+    get(key) {
+      return new Promise((resolve) => {
+        try {
+          const r = this.db.transaction('tiles').objectStore('tiles').get(key);
+          r.onsuccess = () => resolve(r.result || null);
+          r.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+      });
+    },
+    queue: [], timer: 0,
+    put(key, blob) {
+      if (!this.db) return;
+      this.queue.push([key, blob]);
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => {
+        const items = this.queue.splice(0);
+        try {
+          const os = this.db.transaction('tiles', 'readwrite').objectStore('tiles');
+          for (const [k, b] of items) os.put(b, k);
+        } catch (e) { /* quota or private mode: ignore */ }
+      }, 400);
+    },
+  };
   let workersReady = 0, frameNo = 0;
   const tileKey = (L, tx, ty) => season + '/' + L + '/' + tx + '/' + ty;
 
@@ -46,6 +99,8 @@
             if (m.bitmap) cache.set(m.key, { bmp: m.bitmap, used: frameNo });
             dirty = true;
             pump();
+          } else if (m.type === 'blob') {
+            store.put(m.key, m.blob);
           } else if (m.type === 'error') {
             console.error('[worker]', m.message);
             if (workersReady < NW) reject(new Error(m.message));
@@ -59,16 +114,33 @@
   }
 
   let wanted = [];
+  let lookups = 0;
   function pump() {
     for (const key of wanted) {
       if (cache.has(key) || pending.has(key)) continue;
+      const st = store.state.get(key);
+      if (st === 'checking') continue;
+      if (st === undefined && store.db) {
+        if (lookups >= 6) continue;
+        lookups++;
+        store.state.set(key, 'checking');
+        store.get(key).then(async (blob) => {
+          let bmp = null;
+          if (blob) { try { bmp = await createImageBitmap(blob); } catch (e) { bmp = null; } }
+          lookups--;
+          if (bmp) { cache.set(key, { bmp, used: frameNo }); store.state.delete(key); dirty = true; }
+          else store.state.set(key, 'miss');
+          pump();
+        });
+        continue;
+      }
       let best = null;
       for (const w of workers) if (w.inflight < 2 && (!best || w.inflight < best.inflight)) best = w;
       if (!best) return;
       const [, L, tx, ty] = key.split('/');
       best.inflight++;
       pending.set(key, best);
-      best.postMessage({ type: 'tile', key, L: +L, tx: +tx, ty: +ty, theme: season });
+      best.postMessage({ type: 'tile', key, L: +L, tx: +tx, ty: +ty, theme: season, persist: !!store.db });
     }
   }
 
@@ -98,12 +170,57 @@
   const toScreen = (X, Y) => [(X - view.x) * view.s + W / 2, (Y - view.y) * view.s + H / 2];
   const toIso = (sx, sy) => [(sx - W / 2) / view.s + view.x, (sy - H / 2) / view.s + view.y];
 
-  function tileRange(L) {
+  function tileRange(L, v, margin) {
+    v = v || view; margin = margin || 0;
     const span = ISO.TILE * ISO.A0 * (1 << L);
-    const [x0, y0] = toIso(0, 0), [x1, y1] = toIso(W, H);
-    const bx0 = Math.max(x0, isoBounds[0]), by0 = Math.max(y0, isoBounds[1]);
-    const bx1 = Math.min(x1, isoBounds[2]), by1 = Math.min(y1, isoBounds[3]);
+    const hw = W / 2 / v.s + margin * span, hh = H / 2 / v.s + margin * span;
+    const bx0 = Math.max(v.x - hw, isoBounds[0]), by0 = Math.max(v.y - hh, isoBounds[1]);
+    const bx1 = Math.min(v.x + hw, isoBounds[2]), by1 = Math.min(v.y + hh, isoBounds[3]);
     return { span, tx0: Math.floor(bx0 / span), ty0: Math.floor(by0 / span), tx1: Math.floor(bx1 / span), ty1: Math.floor(by1 / span), empty: bx0 > bx1 || by0 > by1 };
+  }
+  const childrenCached = (L, tx, ty) => {
+    if (L === 0) return false;
+    for (let q = 0; q < 4; q++) if (!cache.has(tileKey(L - 1, tx * 2 + (q & 1), ty * 2 + (q >> 1)))) return false;
+    return true;
+  };
+
+  /* Decide what the workers paint next, most useful first:
+     1. the overview level (always kept, it is the fallback for everything),
+     2. half-resolution parents of missing on-screen tiles, so gaps fill fast,
+     3. on-screen tiles at the right level, nearest the centre first,
+     4. a ring of tiles just off screen, so short pans are already painted.
+     While gliding, plan for where the camera is going, not where it is. */
+  function schedule() {
+    const v = anim ? anim.target : view;
+    const L = levelFor(v.s);
+    const out = [];
+    const RO = tileRange(MAXL, { x: 0, y: 0, s: 1e-6 });
+    for (let ty = RO.ty0; ty <= RO.ty1; ty++) for (let tx = RO.tx0; tx <= RO.tx1; tx++) out.push(tileKey(MAXL, tx, ty));
+    const R = tileRange(L, v);
+    if (!R.empty) {
+      const cx = v.x / R.span, cy = v.y / R.span;
+      const vis = [], parents = new Map();
+      for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) {
+        const key = tileKey(L, tx, ty), d = Math.hypot(tx + 0.5 - cx, ty + 0.5 - cy);
+        vis.push([d, key]);
+        if (L < MAXL - 1 && !cache.has(key) && !childrenCached(L, tx, ty)) {
+          const pk = tileKey(L + 1, tx >> 1, ty >> 1);
+          if (!parents.has(pk) || parents.get(pk) > d) parents.set(pk, d);
+        }
+      }
+      [...parents].sort((a, b) => a[1] - b[1]).forEach(([k]) => out.push(k));
+      vis.sort((a, b) => a[0] - b[0]).forEach(([, k]) => out.push(k));
+      if (!anim) {
+        const RR = tileRange(L, v, 1), ring = [];
+        for (let ty = RR.ty0; ty <= RR.ty1; ty++) for (let tx = RR.tx0; tx <= RR.tx1; tx++) {
+          if (tx >= R.tx0 && tx <= R.tx1 && ty >= R.ty0 && ty <= R.ty1) continue;
+          ring.push([Math.hypot(tx + 0.5 - cx, ty + 0.5 - cy), tileKey(L, tx, ty)]);
+        }
+        ring.sort((a, b) => a[0] - b[0]).forEach(([, k]) => out.push(k));
+      }
+    }
+    wanted = out;
+    pump();
   }
 
   function drawTileImage(bmp, sx, sy, sw, sh, X, Y, span) {
@@ -122,12 +239,9 @@
     if (!isoBounds) return;
     const L = levelFor(view.s);
     const R = tileRange(L);
-    const need = [];
     if (!R.empty) {
-      const cxT = view.x / R.span, cyT = view.y / R.span;
       for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) {
         const key = tileKey(L, tx, ty);
-        need.push({ key, d: Math.hypot(tx + 0.5 - cxT, ty + 0.5 - cyT) });
         const X = tx * R.span, Y = ty * R.span;
         const hit = cache.get(key);
         if (hit) { hit.used = frameNo; drawTileImage(hit.bmp, 0, 0, ISO.TILE, ISO.TILE, X, Y, R.span); continue; }
@@ -153,13 +267,7 @@
         }
       }
     }
-    need.sort((a, b) => a.d - b.d);
-    // also keep the overview level warm
-    const RO = tileRange(MAXL);
-    const over = [];
-    for (let ty = RO.ty0; ty <= RO.ty1; ty++) for (let tx = RO.tx0; tx <= RO.tx1; tx++) over.push(tileKey(MAXL, tx, ty));
-    wanted = over.concat(need.map((n) => n.key));
-    pump();
+    schedule();
     evict();
 
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -693,7 +801,11 @@
     const dataUrl = new URL('data/silale.json', location.href).href;
     const bar = $('loadbar');
     bar.style.width = '15%';
-    const [data] = await Promise.all([fetch(dataUrl).then((r) => r.json()), startWorkers(dataUrl)]);
+    await Promise.race([store.open(), new Promise((r) => setTimeout(r, 1500))]);
+    // Workers load the data in parallel; saved tiles can show before they are ready.
+    const workersP = startWorkers(dataUrl);
+    workersP.catch((err) => { console.error(err); toast('This browser could not paint new tiles.'); });
+    const data = await fetch(dataUrl).then((r) => r.json());
     D = data; META = D.meta;
     bar.style.width = '55%';
     const [e0, n0, e1, n1] = META.bounds;

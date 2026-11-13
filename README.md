@@ -53,6 +53,13 @@ To publish it, push to GitHub Pages or any static host.
 4. **Palette snap.** Every pixel is mapped to the nearest colour in the season's palette, which
    removes anti-aliasing.
 
+Tiles are painted in parallel by up to four workers. The viewer asks for them in priority
+order: the overview first, then half-resolution parents of empty on-screen tiles (so gaps fill
+quickly), then on-screen tiles from the centre outwards, then a ring just off screen. During a
+glide it plans for where the camera is going. Painted tiles are also saved to IndexedDB, so
+repeat visits load almost instantly. Bump `VERSION` in `js/shared.js` whenever the renderer
+or data changes, so old saved tiles are thrown away.
+
 There are seven zoom levels, like an image pyramid. The finest level uses 0.4 iso units per
 art pixel. The viewer always picks a level that magnifies art pixels by 1–2× and falls back
 to coarser tiles while finer ones are painted.

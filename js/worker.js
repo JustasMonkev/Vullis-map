@@ -16,22 +16,36 @@ let LAMPS = [];
 let bounds;
 
 // ------------------------------------------------------------ init
+let readyResolve;
+const ready = new Promise((r) => (readyResolve = r));
 self.onmessage = async (ev) => {
   const msg = ev.data;
   if (msg.type === 'init') {
     try {
       const res = await fetch(msg.dataUrl);
       D = await res.json();
+      const t0 = performance.now();
       prepare();
-      self.postMessage({ type: 'ready', trees: TR.n });
+      readyResolve();
+      self.postMessage({ type: 'ready', trees: TR.n, prepMs: performance.now() - t0 });
     } catch (err) {
       self.postMessage({ type: 'error', message: String(err && err.message || err) });
     }
+    return;
+  }
+  await ready;            // tile requests that arrive early wait for the data
+  if (msg.type === 'perf') {
+    self.postMessage({ type: 'perf', perf: PERF });
   } else if (msg.type === 'tile') {
-    let bitmap = null;
-    try { bitmap = paintTile(msg.L, msg.tx, msg.ty, msg.theme); }
-    catch (err) { self.postMessage({ type: 'error', message: 'tile ' + msg.key + ': ' + err.message }); }
+    let bitmap = null, blobP = null;
+    try {
+      paintTile(msg.L, msg.tx, msg.ty, msg.theme);
+      // convertToBlob copies the pixels synchronously; encoding finishes in the background
+      if (msg.persist && canvas.convertToBlob) blobP = canvas.convertToBlob({ type: 'image/png' });
+      bitmap = canvas.transferToImageBitmap();
+    } catch (err) { self.postMessage({ type: 'error', message: 'tile ' + msg.key + ': ' + err.message }); }
     self.postMessage({ type: 'tile', key: msg.key, bitmap }, bitmap ? [bitmap] : []);
+    if (blobP) blobP.then((blob) => self.postMessage({ type: 'blob', key: msg.key, blob }), () => {});
   }
 };
 
@@ -349,7 +363,7 @@ function treeSprite(A, L, kind, v) {
   const c = new OffscreenCanvas(w, h), g = c.getContext('2d');
   const ax = Math.round(w / 2), ay = h - pad;
   draw(g, ax, ay);
-  s = { c, ax, ay };
+  s = { c: c.transferToImageBitmap ? c.transferToImageBitmap() : c, ax, ay };
   A.sprites[key] = s;
   return s;
 }
@@ -377,7 +391,10 @@ const sg = shadowCanvas.getContext('2d');
 const TO_CAM = [-0.6124, -0.6124, 0.5];
 const SUN = [0.62, -0.26];           // ground shadow offset per metre of height (towards east-south-east)
 
+const PERF = { ground: 0, shadow: 0, objects: 0, quant: 0, n: 0 };
 function paintTile(L, tx, ty, themeName) {
+  let tq = performance.now();
+  const lap = (k) => { const t = performance.now(); PERF[k] += t - tq; tq = t; };
   const A = themeAssets(themeName);
   const th = A.th;
   const a = ISO.A0 * (1 << L), k = 1 / a;
@@ -483,31 +500,39 @@ function paintTile(L, tx, ty, themeName) {
   // ---- objects (buildings + trees), far to near
   screen();
   seen.stamp++;
-  const ids = objGrid.query(X0, Y0, X1, Y1 + 60, [], seen);
+  const ids = objGrid.query(X0 - 24, Y0, X1, Y1 + 60, [], seen);
   const nB = B.length;
   const showTrees = L <= 3;
-  const list = [];
+  const list = [], shadowList = [];
   for (const id of ids) {
     if (id < nB) {
       const b = B[id];
+      if (b.bbox[2] < X0 - 24 || b.bbox[0] > X1 || b.bbox[3] < Y0 || b.bbox[1] > Y1 + 24) continue;
+      shadowList.push(id);
       if (b.bbox[2] < X0 || b.bbox[0] > X1 || b.bbox[3] < Y0 || b.bbox[1] > Y1) continue;
       list.push(id);
     } else {
       if (!showTrees) continue;
       const t = id - nB;
       if (L === 3 && TR.f[t]) continue;
-      list.push(id);
+      list.push(id); shadowList.push(id);
     }
   }
+  lap('ground');
   const depthOf = (id) => (id < nB ? B[id].depth : TR.e[id - nB] + TR.n_[id - nB]);
   list.sort((p, q) => depthOf(q) - depthOf(p));
 
   // ground shadows (one opaque layer composited at low alpha so overlaps don't stack)
-  if (!night && L <= 4) {
+  if (!night && L <= 3) {
     sg.setTransform(1, 0, 0, 1, 0, 0); sg.clearRect(0, 0, T, T);
     sg.fillStyle = '#000';
     sg.setTransform(k, -k / 2, -k, -k / 2, -X0 * k, -Y0 * k);
-    for (const id of list) {
+    // The layer is opaque, so overlapping fills are harmless: fill in small batches,
+    // which rasterises far faster than one huge path.
+    sg.beginPath();
+    let batch = 0;
+    for (const id of shadowList) {
+      if (++batch % 24 === 0) { sg.fill('nonzero'); sg.beginPath(); }
       if (id < nB) {
         const b = B[id];
         const hh = b.kind === 'church' ? b.h + 3 : b.h + b.rise * 0.5;
@@ -519,15 +544,18 @@ function paintTile(L, tx, ty, themeName) {
       } else {
         const t = id - nB, kd = TR.k[t];
         const hh = kd === 1 ? 6 : kd === 3 ? 1 : 4.5, r = kd === 3 ? 1.3 : kd === 1 ? 2 : 2.3;
-        sg.beginPath(); sg.ellipse(TR.e[t] + SUN[0] * hh, TR.n_[t] + SUN[1] * hh, r, r, 0, 0, Math.PI * 2); sg.fill();
+        const cx = TR.e[t] + SUN[0] * hh, cy = TR.n_[t] + SUN[1] * hh;
+        sg.moveTo(cx + r, cy); sg.ellipse(cx, cy, r, r, 0, 0, Math.PI * 2);
       }
     }
+    sg.fill('nonzero');
     g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = A.name === 'winter' ? 0.16 : 0.24;
     g.drawImage(shadowCanvas, 0, 0);
     g.restore();
   }
   g.restore();   // drop ground clip
+  lap('shadow');
 
   const ctxB = { g, px, py, k, L, th, night, A };
   for (const id of list) {
@@ -540,23 +568,28 @@ function paintTile(L, tx, ty, themeName) {
     }
   }
 
+  lap('objects');
   quantize(A);
-  return canvas.transferToImageBitmap();
+  lap('quant'); PERF.n++;
 }
 
+// Adds a building's ground shadow to the current path. Every piece is wound the same way
+// (counter-clockwise in world space) so one nonzero fill gives their union.
 function shadowOf(sg, r, h) {
   const dx = SUN[0] * h, dy = SUN[1] * h;
-  sg.beginPath();
   const n = r.length / 2;
   sg.moveTo(r[0] + dx, r[1] + dy);
   for (let i = 1; i < n; i++) sg.lineTo(r[2 * i] + dx, r[2 * i + 1] + dy);
-  sg.closePath(); sg.fill();
+  sg.closePath();
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
-    sg.beginPath();
-    sg.moveTo(r[2 * i], r[2 * i + 1]); sg.lineTo(r[2 * j], r[2 * j + 1]);
-    sg.lineTo(r[2 * j] + dx, r[2 * j + 1] + dy); sg.lineTo(r[2 * i] + dx, r[2 * i + 1] + dy);
-    sg.closePath(); sg.fill();
+    const ax = r[2 * i], ay = r[2 * i + 1], bx = r[2 * j], by = r[2 * j + 1];
+    if ((bx - ax) * dy - (by - ay) * dx >= 0) {
+      sg.moveTo(ax, ay); sg.lineTo(bx, by); sg.lineTo(bx + dx, by + dy); sg.lineTo(ax + dx, ay + dy);
+    } else {
+      sg.moveTo(ax, ay); sg.lineTo(ax + dx, ay + dy); sg.lineTo(bx + dx, by + dy); sg.lineTo(bx, by);
+    }
+    sg.closePath();
   }
 }
 
@@ -880,27 +913,37 @@ function drawChurch(C, b) {
 
 // ------------------------------------------------------------ palette snap
 function quantize(A) {
+  if (!A.lut) {
+    A.lut = new Int16Array(1 << 18).fill(-1);
+    A.palU32 = new Uint32Array(A.pal.length);
+    A.pal.forEach((q, i) => {
+      A.palU32[i] = (255 << 24 | q[2] << 16 | q[1] << 8 | q[0]) >>> 0;
+      A.lut[(q[0] >> 2) | ((q[1] >> 2) << 6) | ((q[2] >> 2) << 12)] = i;   // exact colours win their bucket
+    });
+  }
+  const lut = A.lut, pal = A.pal, palU32 = A.palU32;
   const img = g.getImageData(0, 0, T, T);
-  const d = img.data, pal = A.pal, cache = A.qcache;
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i + 3] < 110) { d[i + 3] = 0; continue; }
-    d[i + 3] = 255;
-    const key = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
-    let c = cache.get(key);
-    if (c === undefined) {
-      let best = 1e9, bi = 0;
-      const r = d[i], gg = d[i + 1], b = d[i + 2];
+  const u = new Uint32Array(img.data.buffer);
+  let lastIn = -1, lastOut = 0;
+  for (let i = 0; i < u.length; i++) {
+    const v = u[i];
+    if (v === lastIn) { u[i] = lastOut; continue; }
+    if ((v >>> 24) < 110) { u[i] = 0; continue; }
+    const r = v & 255, gg = (v >>> 8) & 255, b = (v >>> 16) & 255;
+    const key = (r >> 2) | ((gg >> 2) << 6) | ((b >> 2) << 12);
+    let c = lut[key];
+    if (c < 0) {
+      let best = 1e9;
       for (let p = 0; p < pal.length; p++) {
         const q = pal[p];
         const dr = r - q[0], dg = gg - q[1], db = b - q[2];
         const dist = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
-        if (dist < best) { best = dist; bi = p; }
+        if (dist < best) { best = dist; c = p; }
       }
-      c = bi;
-      if (cache.size < 400000) cache.set(key, c);
+      lut[key] = c;
     }
-    const q = pal[c];
-    d[i] = q[0]; d[i + 1] = q[1]; d[i + 2] = q[2];
+    lastIn = v; lastOut = palU32[c];
+    u[i] = lastOut;
   }
   g.putImageData(img, 0, 0);
 }
