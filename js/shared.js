@@ -220,7 +220,11 @@
     const seed = hash32(i * 2654435761 + 17);
     const m = b.m || 'house';
     let kind = b.roof === 'church' ? 'church' : (b.roof === 'gable' || b.roof === 'hip') ? b.roof : 'flat';
-    const box = kind === 'flat' && m !== 'panel' ? null : obb(r);
+    let box = kind === 'flat' && m !== 'panel' ? null : obb(r);
+    if ((kind === 'gable' || kind === 'hip') && area / (box.l * box.w) < 0.95) {
+      kind = 'flat';
+      box = null;
+    }
     let top = b.h, rise = 0;
     if (kind === 'gable' || kind === 'hip') {
       rise = Math.min(5.5, box.w * 0.5 * (m === 'shed' ? 0.5 : 0.85));
@@ -314,7 +318,7 @@
   }
 
   // Bump whenever the renderer or the data changes: browsers drop tiles saved by older versions.
-  const VERSION = 'r3';
+  const VERSION = 'r4';
 
   const api = {
     VERSION, ISO, isoBoundsOf, levelRange, boxCorners, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
