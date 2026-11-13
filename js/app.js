@@ -489,6 +489,7 @@
   }
   let userMoved = false;
   function zoomAt(sx, sy, f) {
+    cancelGesture();
     anim = null; inertia = null; userMoved = true; cancelCardSoon();
     const [X, Y] = toIso(sx, sy);
     view.s *= f; clampView();

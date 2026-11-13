@@ -59,6 +59,9 @@ async function painted(page) {
     return covered > 100;
   }, null, { timeout: 30000 });
 }
+async function canvasImage(page) {
+  return page.locator('#map').evaluate((canvas) => canvas.toDataURL());
+}
 async function screenshot(page, name) {
   if (!artifacts) return;
   await require('node:fs/promises').mkdir(artifacts, { recursive: true });
@@ -103,9 +106,16 @@ test('transparent finer tiles replace stale coarser pixels', async (t) => {
 test('rapid wheel and button zoom keeps rendering and interrupts a home glide', { timeout: 45000 }, async (t) => {
   const { page, ready } = await openMap(t);
   await ready(); await painted(page); await screenshot(page, 'desktop-close');
+  const closeImage = await canvasImage(page);
+  const control = await openMap(t, {}, '#12.9/55.49043/22.18627');
+  await control.ready(); await painted(control.page);
+  const overviewImage = await canvasImage(control.page);
+  assert.notEqual(closeImage, overviewImage, 'close and overview views must paint different geometry');
   await page.mouse.move(640, 450);
   for (let i = 0; i < 8; i++) await page.mouse.wheel(0, 400);
   await page.waitForFunction(() => document.querySelector('#readout').textContent.endsWith('z12.9'));
+  await page.locator('#zin').hover();
+  await page.waitForFunction((expected) => document.querySelector('#map').toDataURL() === expected, overviewImage, { timeout: 30000 });
   await painted(page); await screenshot(page, 'desktop-rapid-zoom-out');
   for (let i = 0; i < 5; i++) await page.locator('#zin').click({ delay: 5 });
   await page.waitForTimeout(100);
@@ -116,6 +126,7 @@ test('rapid wheel and button zoom keeps rendering and interrupts a home glide', 
   await page.locator('#zin').click();
   await page.locator('#home').click();
   await page.waitForTimeout(80);
+  await page.mouse.move(640, 450);
   await page.mouse.wheel(0, -400);
   await page.waitForTimeout(100);
   const interrupted = await zoom(page);
@@ -158,33 +169,117 @@ test('touch pinch cancellation releases gestures; dragging cancels an active fly
   await painted(page); await screenshot(page, 'mobile-after-pinch');
 });
 
-test('season switches race safely and saved tiles survive reload', { timeout: 45000 }, async (t) => {
-  const { page, ready } = await openMap(t, {}, '#17/55.49043/22.18627');
+test('late season atlases cannot replace the selected summer rendering', { timeout: 45000 }, async (t) => {
+  const { page, ready } = await openMap(t, {}, '#13/55.49043/22.18627');
+  await page.addInitScript(() => {
+    const decode = window.createImageBitmap;
+    window.decodedAtlases = 0;
+    window.createImageBitmap = async (...args) => {
+      const bitmap = await decode(...args);
+      window.decodedAtlases++;
+      return bitmap;
+    };
+  });
+  const held = new Map(['winter', 'night'].map((season) => {
+    let ready;
+    const requested = new Promise((resolve) => { ready = resolve; });
+    return [season, { routes: [], requested, ready }];
+  }));
+  const atlas = JSON.parse(await readFile(resolve(root, 'tiles/atlas.json'), 'utf8'));
+  const levelCount = Object.keys(atlas.levels).length;
   await page.route('**/tiles/*.webp', async (route) => {
-    const atlasDelayMs = 150; // Keep requests overlapping the three rapid season switches.
-    await new Promise((done) => setTimeout(done, atlasDelayMs)); await route.continue();
+    const season = new URL(route.request().url()).pathname.split('/').pop().split('-')[0];
+    const gate = held.get(season);
+    if (!gate) { await route.continue(); return; }
+    gate.routes.push(route);
+    if (gate.routes.length === levelCount) gate.ready();
   });
   await ready();
+  await page.waitForFunction((count) => window.decodedAtlases === count, levelCount);
+  const summer = await canvasImage(page);
   await page.getByRole('radio', { name: 'Winter' }).click();
+  await held.get('winter').requested;
   await page.getByRole('radio', { name: 'Night' }).click();
+  await held.get('night').requested;
   await page.getByRole('radio', { name: 'Summer' }).click();
-  await painted(page);
-  await page.waitForTimeout(1500);
-  await page.waitForFunction(() => new Promise((resolveCount, rejectCount) => {
-    const request = indexedDB.open('isometric-silale', 1);
-    request.onerror = () => rejectCount(request.error);
-    request.onsuccess = () => {
-      const db = request.result;
-      const count = db.transaction('tiles').objectStore('tiles').count();
-      count.onsuccess = () => { db.close(); resolveCount(count.result > 1); };
-      count.onerror = () => { db.close(); rejectCount(count.error); };
-    };
-  }));
+  await page.waitForFunction((count) => window.decodedAtlases === count, levelCount * 2);
+  await page.waitForFunction((expected) => document.querySelector('#map').toDataURL() === expected, summer);
+  let decoded = levelCount * 2;
+  for (const season of ['night', 'winter']) {
+    await Promise.all(held.get(season).routes.map((route) => route.continue()));
+    decoded += levelCount;
+    await page.waitForFunction((count) => window.decodedAtlases === count, decoded);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await canvasImage(page), summer, `late ${season} atlas must not repaint summer`);
+  }
   assert.equal(await page.locator('body').getAttribute('data-season'), 'summer');
   assert.equal(await page.getByRole('radio', { name: 'Summer' }).getAttribute('aria-checked'), 'true');
+});
+
+test('reload paints a known saved tile while worker regeneration is withheld', { timeout: 45000 }, async (t) => {
+  const { page, ready } = await openMap(t, {}, '#17/55.49043/22.18627');
+  await page.route('**/tiles/atlas.json', (route) => route.fulfill({ status: 404, body: '' }));
+  await page.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    window.withheldTiles = 0;
+    Worker.prototype.postMessage = function (message, ...args) {
+      if (sessionStorage.getItem('withhold-tiles') && message.type === 'tile') {
+        window.withheldTiles++;
+        return;
+      }
+      return post.call(this, message, ...args);
+    };
+  });
+  await ready(); await painted(page);
+  const { meta } = JSON.parse(await readFile(resolve(root, 'data/silale.json'), 'utf8'));
+  const key = await page.evaluate((meta) => {
+    const { ISO, latLonToWorld, isoX, isoY } = window.SIL;
+    const [e, n] = latLonToWorld(meta, 55.49043, 22.18627);
+    const span = ISO.TILE * ISO.A0 * 4;
+    return `summer/2/${Math.floor(isoX(e, n) / span)}/${Math.floor(isoY(e, n, 0) / span)}`;
+  }, meta);
+  await page.waitForFunction((key) => new Promise((resolveTile, rejectTile) => {
+    const request = indexedDB.open('isometric-silale', 1);
+    request.onerror = () => rejectTile(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tile = db.transaction('tiles').objectStore('tiles').get(key);
+      tile.onsuccess = () => { db.close(); resolveTile(tile.result instanceof Blob); };
+      tile.onerror = () => { db.close(); rejectTile(tile.error); };
+    };
+  }), key);
+  await page.evaluate(async (key) => {
+    const marker = new OffscreenCanvas(256, 256);
+    const ctx = marker.getContext('2d');
+    ctx.fillStyle = '#ff00ff'; ctx.fillRect(0, 0, 256, 256);
+    const blob = await marker.convertToBlob();
+    await new Promise((done, reject) => {
+      const request = indexedDB.open('isometric-silale', 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction('tiles', 'readwrite');
+        const tiles = tx.objectStore('tiles');
+        tiles.clear();
+        tiles.put(window.SIL.VERSION, '__version');
+        tiles.put(blob, key);
+        tx.oncomplete = () => { db.close(); done(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+      };
+    });
+    sessionStorage.setItem('withhold-tiles', '1');
+  }, key);
   await page.reload();
   await page.locator('#loader').waitFor({ state: 'hidden', timeout: 30000 });
-  await painted(page);
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('#map');
+    const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    let magenta = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] === 255 && data[i + 1] === 0 && data[i + 2] === 255 && data[i + 3] === 255) magenta++;
+    }
+    return magenta > 100 && window.withheldTiles > 0;
+  });
   assert.equal(await page.locator('body').getAttribute('data-season'), 'summer');
   await screenshot(page, 'reloaded-summer');
 });

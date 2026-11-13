@@ -45,7 +45,7 @@ npm test
 Camera and geometry tests also run without installed packages:
 
 ```sh
-node --test tests/camera.test.cjs tests/realism.test.cjs
+node --test tests/atlas.test.cjs tests/camera.test.cjs tests/realism.test.cjs
 ```
 
 The browser suite uses actual workers and canvas rendering on desktop and mobile-sized

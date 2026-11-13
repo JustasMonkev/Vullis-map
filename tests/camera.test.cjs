@@ -14,12 +14,14 @@ function viewer(loading = false) {
     if (!elements.has(id)) {
       const listeners = new Map();
       const classes = new Set();
+      const captures = new Set();
       elements.set(id, {
         hidden: true, style: {}, dataset: {}, value: '', tagName: 'CANVAS',
         classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), toggle() {}, contains: (name) => classes.has(name) },
         addEventListener: (name, fn) => listeners.set(name, fn),
         dispatch: (name, fields = {}) => listeners.get(name)?.({ pointerId: 1, pointerType: 'touch', button: 0, clientX: 400, clientY: 300, preventDefault() {}, ...fields }),
-        getContext: () => context, setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {},
+        getContext: () => context, setPointerCapture: (pointerId) => captures.add(pointerId),
+        hasPointerCapture: (pointerId) => captures.has(pointerId), releasePointerCapture: (pointerId) => captures.delete(pointerId),
       });
     }
     return elements.get(id);
@@ -99,6 +101,33 @@ test('Home replaces pan momentum with one camera animation', () => {
   assert.equal(v.state().inertia, null);
   assert.ok(v.state().anim);
 });
+
+for (const [name, zoom, factor] of [
+  ['wheel', (v) => v.canvas.dispatch('wheel', { deltaY: Math.log(2) / 0.0022, deltaMode: 0 }), 0.5],
+  ['button', (v) => v.element('zout').onclick(), 1 / 1.8],
+  ['key', (v) => v.window.dispatch('keydown', { key: '-', target: {} }), 1 / 1.6],
+]) {
+  test(`${name} zoom ends an active pinch so stale moves cannot restore its scale`, () => {
+    const v = viewer();
+    v.canvas.dispatch('pointerdown', { clientX: 200 });
+    v.canvas.dispatch('pointerdown', { pointerId: 2, clientX: 600 });
+    v.canvas.dispatch('pointermove', { clientX: 250 });
+    const scale = v.view.s * factor;
+    zoom(v);
+    assert.equal(v.view.s, scale);
+    v.canvas.dispatch('pointermove', { clientX: 250 });
+    assert.equal(v.view.s, scale);
+    assert.equal(v.state().gesture, null);
+    assert.equal(v.state().pointers, 0);
+    assert.equal(v.canvas.hasPointerCapture(1), false);
+    assert.equal(v.canvas.hasPointerCapture(2), false);
+    v.canvas.dispatch('pointerup');
+    v.canvas.dispatch('pointerup', { pointerId: 2 });
+    assert.equal(v.state().anim, null);
+    v.canvas.dispatch('pointerdown', { pointerId: 3 });
+    assert.equal(v.state().gesture.type, 'pan');
+  });
+}
 
 test('remaining finger interrupts the quick two-finger zoom before panning', () => {
   const v = viewer();
@@ -190,12 +219,18 @@ test('repeated tile failures stop retrying and leave capacity for other tiles', 
 test('a crashed worker releases its pending tiles for the surviving workers', () => {
   const v = viewer();
   v.startWorkers('data.json').catch(() => {});
-  const keys = ['summer/0/0/0', 'summer/0/1/0', 'summer/0/2/0'];
+  const keys = ['summer/0/0/0', 'summer/0/1/0', 'summer/0/2/0', 'summer/0/3/0'];
   v.want(keys);
   const failed = v.pending.get(keys[0]);
+  assert.equal(v.pending.get(keys[3]), failed);
   failed.onerror(new Error('worker crashed'));
   assert.equal(v.errors.length, 1);
   assert.equal(failed.terminated, true);
   assert.notEqual(v.pending.get(keys[0]), failed);
   assert.ok(v.pending.has(keys[0]));
+  assert.notEqual(v.pending.get(keys[3]), failed);
+  assert.ok(v.pending.has(keys[3]));
+  const requestCount = failed.messages.length;
+  v.want([...keys, 'summer/0/4/0']);
+  assert.equal(failed.messages.length, requestCount);
 });
