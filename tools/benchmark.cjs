@@ -18,10 +18,12 @@ const timeout = 90000;
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webp': 'image/webp' };
 const seam = '  boot().catch((err) => {';
 const probe = `
-  let measured = null;
+  let measured = null, lastDraw = null, firstDrawMs = null;
   const drawForBenchmark = drawTileImage;
   drawTileImage = (...args) => {
     drawForBenchmark(...args);
+    lastDraw = { season, frame: frameNo };
+    if (firstDrawMs === null) firstDrawMs = performance.now();
     if (measured && season === measured.season && frameNo > measured.frame && measured.firstPaintMs === null)
       measured.firstPaintMs = performance.now() - measured.start;
   };
@@ -36,8 +38,9 @@ const probe = `
       const L = levelFor(view.s), R = tileRange(L), keys = [];
       if (!R.empty) for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) keys.push(tileKey(L, tx, ty));
       const exact = keys.length > 0 && keys.every(key => cache.has(key));
-      if (!measured) return { exact, liveTiles: [...cache].filter(([key, value]) => isLive(key, value)).length };
-      if (measured.firstPaintMs === null || season !== measured.season || !exact || frameNo <= measured.frame || dirty) return null;
+      const rendered = !dirty && lastDraw?.frame === frameNo && lastDraw.season === season;
+      if (!measured) return { exact: exact && rendered, firstPaintMs: firstDrawMs, liveTiles: [...cache].filter(([key, value]) => isLive(key, value)).length };
+      if (measured.firstPaintMs === null || season !== measured.season || !exact || frameNo <= measured.frame || !rendered) return null;
       return {
         firstPaintMs: measured.firstPaintMs, exactViewMs: performance.now() - measured.start,
         paintRequests: window.benchmarkRequests.length - measured.requests,
@@ -71,7 +74,7 @@ async function main() {
   try {
     browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined, args: ['--no-sandbox'] });
     for (const mobile of [false, true]) for (let sample = 1; sample <= samples; sample++) for (const variant of variants) {
-      const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 }, isMobile: mobile, hasTouch: mobile, reducedMotion: 'reduce' });
+      const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 }, deviceScaleFactor: mobile ? 3 : 1, isMobile: mobile, hasTouch: mobile, reducedMotion: 'reduce' });
       try {
         const page = await context.newPage();
         const errors = [];
@@ -93,13 +96,25 @@ async function main() {
         }, { mobile });
         await page.goto(`http://127.0.0.1:${server.address().port}/#19/55.49043/22.18627`);
         await page.locator('#loader').waitFor({ state: 'hidden', timeout });
-        await page.waitForFunction(() => window.mapBenchmark?.sample()?.exact, null, { timeout });
-        const startup = await page.evaluate(() => ({ coldLoadMs: performance.now(), paintRequests: window.benchmarkRequests.length, ...window.mapBenchmark.sample() }));
+        const startupHandle = await page.waitForFunction(() => {
+          const snapshot = window.mapBenchmark?.sample();
+          return snapshot?.exact ? { coldLoadMs: performance.now(), paintRequests: window.benchmarkRequests.length, ...snapshot } : null;
+        }, null, { timeout });
+        const startup = await startupHandle.jsonValue();
+        await startupHandle.dispose();
+        assert.equal(startup.exact, true, 'startup must have rendered every visible exact tile');
+        for (const key of ['coldLoadMs', 'firstPaintMs', 'paintRequests', 'liveTiles'])
+          assert.ok(Number.isFinite(startup[key]), `benchmark startup: ${key} must be finite`);
         const actions = [];
         for (const [action, value] of [['season', 'winter'], ['season', 'night'], ['season', 'winter'], ['season', 'night'], ['zoom', 0.625], ['zoom', 2.5], ['zoom', 12], ['zoom', 0.625]]) {
           await page.evaluate(({ action, value }) => window.mapBenchmark.begin(action, value), { action, value });
-          await page.waitForFunction(() => window.mapBenchmark.sample(), null, { timeout });
-          actions.push({ action, value, ...await page.evaluate(() => window.mapBenchmark.sample()) });
+          const handle = await page.waitForFunction(() => window.mapBenchmark.sample(), null, { timeout });
+          const measurement = await handle.jsonValue();
+          await handle.dispose();
+          for (const key of ['firstPaintMs', 'exactViewMs', 'paintRequests', 'visiblePaintRequests', 'visibleTiles', 'liveTiles'])
+            assert.ok(Number.isFinite(measurement[key]), `benchmark ${action} ${value}: ${key} must be finite`);
+          assert.ok(measurement.exactViewMs >= measurement.firstPaintMs, 'exact rendering cannot precede its first tile draw');
+          actions.push({ action, value, ...measurement });
         }
         assert.deepEqual(errors, [], 'benchmark browser exceptions');
         rows.push({ variant: variant.name, device: mobile ? 'mobile' : 'desktop', sample, startup, actions });
@@ -122,7 +137,8 @@ async function main() {
       });
     }
     const output = { samples, browser: await browser.version(), baseline: baseline || null,
-      conditions: { desktop: '1280x900, 1x CPU, 8 GB memory hint, 4 workers', mobile: '390x844 touch emulation, 4x main-thread CPU throttling, 4 GB memory hint, 3 workers', network: 'localhost, unthrottled; each sample starts in a fresh browser context', scope: 'Baseline and candidate viewer source use identical renderer/data/assets. First paint means a new current-season tile draw; exact view means all visible selected-level tiles cached and rendered.' },
+      variants: variants.map(({ name, commit }) => ({ name, commit: commit || null })),
+      conditions: { desktop: '1280x900, DPR 1, 1x CPU, 8 GB memory hint, 4 workers', mobile: '390x844 touch emulation, DPR 3 (map capped at 2.5), 4x main-thread CPU throttling, 4 GB memory hint, 3 workers', network: 'localhost, unthrottled; each sample starts in a fresh browser context', scope: 'Baseline and candidate viewer source use identical renderer/data/assets. First paint means a new current-season tile draw; exact view means all visible selected-level tiles cached and rendered.' },
       summary, rows,
     };
     const directory = process.env.TEST_ARTIFACTS || resolve(root, 'test-results');

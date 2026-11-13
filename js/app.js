@@ -8,6 +8,7 @@
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const MAXL = ISO.LEVELS - 1;
+  const SEASONS = Object.keys(window.SIL.THEMES);
   const Z_OFF = 17;                 // displayed zoom = Z_OFF + log2(css px per iso unit)
   const S_MIN = 0.06, S_MAX = 12;
 
@@ -74,8 +75,9 @@
       this.timer = setTimeout(() => {
         const items = this.queue.splice(0);
         try {
-          const os = this.db.transaction('tiles', 'readwrite').objectStore('tiles');
+          const tx = this.db.transaction('tiles', 'readwrite'), os = tx.objectStore('tiles');
           for (const [k, b] of items) os.put(b, k);
+          tx.oncomplete = () => { for (const [k] of items) if (this.state.get(k) === 'miss') this.state.delete(k); };
         } catch (e) { /* quota or private mode: ignore */ }
       }, 400);
     },
@@ -108,8 +110,7 @@
             pending.delete(m.key);
             if (m.bitmap) {
               failedTiles.delete(m.key);
-              if (m.key.startsWith(season + '/')) cache.set(m.key, { bmp: m.bitmap, used: frameNo });
-              else m.bitmap.close();                    // finished after a season switch
+              cache.set(m.key, { bmp: m.bitmap, used: frameNo });
             } else failedTiles.set(m.key, (failedTiles.get(m.key) || 0) + 1);
             dirty = true;
             pump();
@@ -147,10 +148,10 @@
         .then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); })
         .then((blob) => createImageBitmap(blob))
         .then((bmp) => {
-          if (sz !== season) { bmp.close(); delete baked.loading[id]; return; }
+          // Keep all twelve bundled atlases (81 MiB decoded) for immediate season changes.
           baked.bmp[id] = bmp;
           for (let r = 0; r < lv.rows; r++) for (let c = 0; c < lv.cols; c++)
-            cache.set(tileKey(L, lv.tx0 + c, lv.ty0 + r), { bmp, sx: c * ISO.TILE, sy: r * ISO.TILE, baked: true, used: frameNo });
+            cache.set(sz + '/' + L + '/' + (lv.tx0 + c) + '/' + (lv.ty0 + r), { bmp, sx: c * ISO.TILE, sy: r * ISO.TILE, baked: true, used: frameNo });
           dirty = true;
         })
         .catch(() => { baked.failed[id] = true; delete baked.loading[id]; pump(); });
@@ -165,8 +166,8 @@
   function pump() {
     for (const key of wanted) {
       if (cache.has(key) || pending.has(key) || failedTiles.get(key) >= 2) continue;
-      const kl = +key.split('/')[1];
-      if (bakedLevel(kl) && !baked.failed[season + '-L' + kl]) { loadBaked(season, kl); continue; }
+      const [theme, L, tx, ty] = key.split('/'), kl = +L;
+      if (bakedLevel(kl) && !baked.failed[theme + '-L' + kl]) { loadBaked(theme, kl); continue; }
       const st = store.state.get(key);
       if (st === 'checking') continue;
       if (st === undefined && store.db) {
@@ -177,8 +178,7 @@
           let bmp = null;
           if (blob) { try { bmp = await createImageBitmap(blob); } catch (e) { bmp = null; } }
           lookups--;
-          if (bmp && !key.startsWith(season + '/')) { bmp.close(); bmp = null; store.state.delete(key); }
-          else if (bmp) { cache.set(key, { bmp, used: frameNo }); store.state.delete(key); dirty = true; }
+          if (bmp) { cache.set(key, { bmp, used: frameNo }); store.state.delete(key); dirty = true; }
           else store.state.set(key, 'miss');
           pump();
         });
@@ -187,7 +187,6 @@
       let best = null;
       for (const w of workers) if (!w.failed && w.inflight < 2 && (!best || w.inflight < best.inflight)) best = w;
       if (!best) return;
-      const [theme, L, tx, ty] = key.split('/');     // the key names its own season
       best.inflight++;
       pending.set(key, best);
       best.postMessage({ type: 'tile', key, L: +L, tx: +tx, ty: +ty, theme, persist: !!store.db });
@@ -288,9 +287,20 @@
     const planned = new Set(out);
     const liveKey = (k) => {
       const L = +k.split('/')[1];
-      return L < MAXL - 1 && (!bakedLevel(L) || baked.failed[season + '-L' + L]);
+      return L < MAXL - 1 && (!bakedLevel(L) || baked.failed[k.split('/')[0] + '-L' + L]);
     };
     let liveWanted = [...planned].filter(liveKey).length;
+    // Warm only the visible level of other seasons, sharing the same detail budget.
+    const focus = openingFocus ? { ...v, ...openingFocus } : v;
+    const otherL = levelFor(focus.s), otherR = tileRange(otherL, focus);
+    if (!otherR.empty) for (const sz of SEASONS) {
+      if (sz === season) continue;
+      for (let ty = otherR.ty0; ty <= otherR.ty1; ty++) for (let tx = otherR.tx0; tx <= otherR.tx1; tx++) {
+        const key = sz + '/' + otherL + '/' + tx + '/' + ty;
+        if (liveKey(key)) { if (liveWanted >= CACHE_MAX - 4) continue; liveWanted++; }
+        planned.add(key); out.push(key);
+      }
+    }
     const zoom = zoomTiles(v).concat(openingFocus ? zoomTiles(openingFocus) : []);
     for (const key of zoom) {
       if (planned.has(key)) continue;
@@ -809,12 +819,9 @@
     if (!sz || sz === season) return;
     season = sz;
     failedTiles.clear();
-    wanted = []; wantedSet = new Set();           // nothing from the old season gets requested again
+    wanted = []; wantedSet = new Set();
     document.body.dataset.season = sz;
     document.querySelectorAll('.season button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.season === sz)));
-    // drop tiles of other seasons, keeping memory in check
-    for (const [k, v] of cache) if (!k.startsWith(sz + '/')) { if (!v.baked && v.bmp.close) v.bmp.close(); cache.delete(k); }
-    for (const id of Object.keys(baked.bmp)) if (!id.startsWith(sz + '-')) { baked.bmp[id].close(); delete baked.bmp[id]; delete baked.loading[id]; }
     if (baked.meta) loadBakedSeason(sz);
     try { localStorage.setItem('silale-season', sz); } catch (e) { /* storage unavailable */ }
     dirty = true;
@@ -1114,7 +1121,7 @@
     // Workers load the data in parallel; saved tiles can show before they are ready.
     const workersP = startWorkers(dataUrl);
     workersP.catch((err) => { console.error(err); toast('This browser could not paint new tiles.'); });
-    const atlasP = loadAtlasMeta().then(() => loadBakedSeason(season));
+    const atlasP = loadAtlasMeta().then(() => Promise.all(SEASONS.map(loadBakedSeason)));
     const data = await window.SIL.loadMapData(dataUrl);
     D = data; META = D.meta;
     bar.style.width = '55%';
@@ -1133,7 +1140,7 @@
     const fromHash = readHash();
     Object.assign(view, fromHash || homeView());
     clampView();
-    if (!fromHash && !reduceMotion) openingFocus = { x: 0, y: 0 };
+    if (!fromHash && !reduceMotion) openingFocus = { x: 0, y: 0, s: Math.pow(2, 16.7 - Z_OFF) };
     window.addEventListener('hashchange', () => { const v = readHash(); if (v) { cancelCardSoon(); flyTo(v); } });
     await Promise.race([atlasP, new Promise((r) => setTimeout(r, 4000))]);
     document.querySelector('#loader p').textContent = 'Preparing zoom levels';

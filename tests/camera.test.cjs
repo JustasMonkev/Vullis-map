@@ -48,7 +48,7 @@ function viewer(loading = false, options = {}) {
   const source = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8').replace('  boot().catch((err) => {', `
   globalThis.camera = {
     view, cache, toIso, render, flyTo, zoomAt, startWorkers, pending,
-    schedule, evict, waitForPreparedTiles, setSeason, cacheMax: CACHE_MAX,
+    schedule, evict, waitForPreparedTiles, setSeason, store, cacheMax: CACHE_MAX,
     plan: () => ({ wanted: [...wanted], prepared: [...prepared] }),
     bounds(value) { isoBounds = value; },
     focus(value) { openingFocus = value; },
@@ -273,7 +273,7 @@ test('optional preparation obeys a low-memory budget and town edges', () => {
   Object.assign(v.view, { x: 50, y: 50, s: 4 });
   v.schedule();
   assert.deepEqual(Array.from(v.plan().prepared.filter((key) => +key.split('/')[1] <= 2)).sort(), [
-    'summer/0/0/0', 'summer/1/0/0', 'summer/2/0/0',
+    'night/0/0/0', 'summer/0/0/0', 'summer/1/0/0', 'summer/2/0/0', 'winter/0/0/0',
   ]);
 });
 
@@ -281,7 +281,7 @@ test('prepared detail tiles survive eviction and repeated zoom changes', () => {
   const v = viewer();
   v.view.s = 0.625;
   v.schedule();
-  const prepared = Array.from(v.plan().prepared).filter((key) => +key.split('/')[1] <= 2);
+  const prepared = Array.from(v.plan().prepared).filter((key) => key.startsWith('summer/') && +key.split('/')[1] <= 2);
   let closed = 0;
   for (const key of prepared) v.cache.set(key, { bmp: { close() { throw new Error('prepared tile was discarded'); } }, used: -1 });
   for (let x = 100; x < 100 + v.cacheMax * 2; x++) v.cache.set(`summer/0/${x}/0`, { bmp: { close() { closed++; } }, used: -1 });
@@ -330,7 +330,7 @@ test('unavailable tiles cannot hold startup past its preparation deadline', asyn
   assert.equal(v.timers.size, 0, 'deadline completion leaves no poll behind');
 });
 
-test('season changes replace protected zoom work and reject stale painted tiles', () => {
+test('season changes retain late painted tiles under their original season key', () => {
   const v = viewer();
   v.startWorkers('data.json').catch(() => {});
   v.view.s = 4;
@@ -340,22 +340,26 @@ test('season changes replace protected zoom work and reject stale painted tiles'
   v.schedule();
   const { wanted, prepared } = v.plan();
   assert.ok(prepared.some((key) => key.startsWith('winter/2/')));
-  assert.ok(wanted.every((key) => key.startsWith('winter/')));
+  assert.ok(wanted.some((key) => key.startsWith('summer/0/')), 'inactive visible tiles remain useful preload work');
   let closed = false;
-  worker.onmessage({ data: { type: 'tile', key: oldKey, bitmap: { close() { closed = true; } } } });
-  assert.equal(closed, true, 'late previous-season output must release its bitmap');
-  assert.equal(v.cache.has(oldKey), false);
-  assert.ok(v.plan().prepared.every((key) => key.startsWith('winter/')));
+  const bitmap = { close() { closed = true; } };
+  worker.onmessage({ data: { type: 'tile', key: oldKey, bitmap } });
+  assert.equal(closed, false, 'a valid previous-season tile should remain reusable');
+  assert.equal(v.cache.get(oldKey).bmp, bitmap);
+  v.render();
+  assert.equal(v.draws.some(([kind, image]) => kind === 'draw' && image === bitmap), false, 'summer output cannot be drawn into winter');
+  v.setSeason('summer');
+  assert.equal(v.cache.get(oldKey).bmp, bitmap, 'switching back must retain the completed tile');
 });
 
 test('failed baked levels share the same live budget as zoom preparation', () => {
   const v = viewer(false, { width: 2048, height: 2048, memory: 1 });
-  v.atlas({ 4: {} }, ['summer-L4']);
+  v.atlas({ 4: {} }, ['summer-L4', 'winter-L4', 'night-L4']);
   v.view.s = 0.2;
   v.schedule();
   const live = v.plan().wanted.filter((key) => +key.split('/')[1] < 5);
   assert.ok(live.some((key) => key.startsWith('summer/4/')), 'failed overview tiles must be generated live');
-  assert.ok(live.some((key) => key.startsWith('summer/0/')), 'remaining capacity should still prepare detail');
+  assert.ok(live.some((key) => key.startsWith('winter/4/')), 'remaining capacity should prepare another season');
   assert.ok(live.length <= v.cacheMax - 4, 'failed atlas fallback cannot hide its memory use from the budget');
 });
 
@@ -372,4 +376,62 @@ test('the opening move prepares the landing point as well as the initial view', 
   v.focus(null);
   v.schedule();
   assert.equal(v.plan().prepared.includes('summer/0/0/0'), false, 'finished startup must not keep warming an abandoned opening target');
+});
+
+test('inactive seasons prepare only their visible level before optional zoom work', () => {
+  const v = viewer();
+  v.view.s = 4;
+  v.schedule();
+  const { wanted } = v.plan();
+  const active = ['summer/0/-1/-1', 'summer/0/0/-1', 'summer/0/-1/0', 'summer/0/0/0'];
+  const optional = wanted.findIndex((key) => key === 'summer/2/0/0');
+  for (const season of ['winter', 'night']) {
+    const inactive = wanted.filter((key) => key.startsWith(season + '/'));
+    assert.equal(inactive.length, 4, 'inactive seasons must not preload a full detail pyramid');
+    assert.ok(inactive.every((key) => key.startsWith(season + '/0/')));
+    assert.ok(inactive.every((key) => wanted.indexOf(key) < optional), 'season changes take priority over optional zoom work');
+    assert.ok(active.every((key) => wanted.indexOf(key) < wanted.indexOf(inactive[0])), 'active visible tiles take priority over other seasons');
+  }
+});
+
+test('all seasons share one live cache limit', () => {
+  const v = viewer(false, { memory: 1 });
+  const protectedKey = 'night/0/0/0';
+  const closed = new Set();
+  for (let x = 0; x < v.cacheMax; x++) for (const season of ['summer', 'winter', 'night']) {
+    const key = `${season}/0/${x}/0`;
+    v.cache.set(key, { bmp: { close() { closed.add(key); } }, used: -1 });
+  }
+  v.want([protectedKey]);
+  v.evict();
+  assert.ok(v.cache.has(protectedKey));
+  assert.equal(v.cache.size, v.cacheMax, 'retaining seasons must not multiply the live cache budget');
+  for (const season of ['summer', 'winter', 'night']) assert.ok([...closed].some((key) => key.startsWith(season + '/')), 'every season must be eligible for LRU eviction');
+});
+
+test('persisted misses are invalidated after commit but survive a failed write', () => {
+  const v = viewer();
+  const transactions = [];
+  v.store.db = { transaction() {
+    const tx = { objectStore: () => ({ put() {} }) };
+    transactions.push(tx);
+    return tx;
+  } };
+  const key = 'night/0/0/0';
+  v.store.state.set(key, 'miss');
+  v.store.put(key, {});
+  v.runTimers(400);
+  assert.equal(v.store.state.get(key), 'miss', 'queued data is unavailable until its storage transaction commits');
+  transactions[0].oncomplete();
+  assert.equal(v.store.state.has(key), false, 'a newly persisted tile must be checked in storage after memory eviction');
+  v.store.put(key, {});
+  v.store.state.set(key, 'checking');
+  v.runTimers(400);
+  transactions[1].oncomplete();
+  assert.equal(v.store.state.get(key), 'checking', 'a persistence commit must not reopen a lookup already decoding its saved tile');
+  v.store.db = { transaction() { throw new Error('storage quota exceeded'); } };
+  v.store.state.set(key, 'miss');
+  v.store.put(key, {});
+  v.runTimers(400);
+  assert.equal(v.store.state.get(key), 'miss', 'a failed transaction has no saved tile to invalidate the miss');
 });

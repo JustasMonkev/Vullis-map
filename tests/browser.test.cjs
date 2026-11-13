@@ -62,6 +62,39 @@ async function painted(page) {
 async function canvasImage(page) {
   return page.locator('#map').evaluate((canvas) => canvas.toDataURL());
 }
+async function observeSeasonCache(page) {
+  await page.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    window.tilePaintRequests = [];
+    window.withholdPaint = false;
+    Worker.prototype.postMessage = function (message, ...args) {
+      if (message.type === 'tile') {
+        window.tilePaintRequests.push(message.key);
+        if (window.withholdPaint) return;
+      }
+      return post.call(this, message, ...args);
+    };
+  });
+  await page.route('**/js/app.js', async (route) => {
+    const source = await readFile(resolve(root, 'js/app.js'), 'utf8');
+    const seam = '  boot().catch((err) => {';
+    assert.ok(source.includes(seam));
+    const probe = `
+      window.seasonCache = {
+        snapshot() {
+          const L = levelFor(view.s), R = tileRange(L), keys = [];
+          for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) keys.push(tileKey(L, tx, ty));
+          return { season, keys, exact: keys.every(key => cache.has(key)), dirty, paints: [...window.tilePaintRequests] };
+        },
+        saved: key => store.get(key),
+        miss: key => store.state.get(key),
+        has: key => cache.has(key),
+        evict(key) { cache.get(key).bmp.close(); cache.delete(key); dirty = true; },
+      };
+    `;
+    await route.fulfill({ contentType: 'text/javascript', body: source.replace(seam, probe + seam) });
+  });
+}
 async function screenshot(page, name) {
   if (!artifacts) return;
   await require('node:fs/promises').mkdir(artifacts, { recursive: true });
@@ -477,9 +510,9 @@ test('late season atlases cannot replace the selected summer rendering', { timeo
   await page.getByRole('radio', { name: 'Night' }).click();
   await held.get('night').requested;
   await page.getByRole('radio', { name: 'Summer' }).click();
-  await page.waitForFunction((count) => window.decodedAtlases === count, levelCount * 2);
+  await page.waitForFunction((count) => window.decodedAtlases === count, levelCount);
   await page.waitForFunction((expected) => document.querySelector('#map').toDataURL() === expected, summer);
-  let decoded = levelCount * 2;
+  let decoded = levelCount;
   for (const season of ['night', 'winter']) {
     await Promise.all(held.get(season).routes.map((route) => route.continue()));
     decoded += levelCount;
@@ -489,6 +522,64 @@ test('late season atlases cannot replace the selected summer rendering', { timeo
   }
   assert.equal(await page.locator('body').getAttribute('data-season'), 'summer');
   assert.equal(await page.getByRole('radio', { name: 'Summer' }).getAttribute('aria-checked'), 'true');
+  for (const season of ['Winter', 'Night', 'Summer']) {
+    await page.getByRole('radio', { name: season, exact: true }).click();
+    if (season === 'Summer') await page.waitForFunction((expected) => document.querySelector('#map').toDataURL() === expected, summer);
+    else await page.waitForFunction((expected) => document.querySelector('#map').toDataURL() !== expected, summer);
+  }
+  assert.equal(await page.evaluate(() => window.decodedAtlases), levelCount * 3, 'retained seasonal overviews must not be decoded again');
+});
+
+for (const mobile of [false, true]) {
+  test(`first and repeated Winter to Night switches reuse visible tiles on ${mobile ? 'mobile' : 'desktop'}`, { timeout: 60000 }, async (t) => {
+    const { page, ready } = await openMap(t, {
+      reducedMotion: 'reduce', viewport: { width: mobile ? 390 : 1280, height: mobile ? 844 : 900 },
+      isMobile: mobile, hasTouch: mobile,
+    });
+    await observeSeasonCache(page);
+    await ready();
+    await page.waitForFunction(() => { const state = window.seasonCache.snapshot(); return state.exact && !state.dirty; });
+    const images = { Summer: await canvasImage(page) };
+    for (const name of ['Winter', 'Night', 'Winter', 'Night', 'Summer']) {
+      const before = await page.evaluate(() => window.seasonCache.snapshot());
+      await page.getByRole('radio', { name, exact: true }).click();
+      await page.waitForFunction((season) => {
+        const state = window.seasonCache.snapshot();
+        return state.season === season && state.exact && !state.dirty;
+      }, name.toLowerCase());
+      const after = await page.evaluate(() => window.seasonCache.snapshot());
+      assert.ok(after.keys.length > 0);
+      assert.deepEqual(after.paints.slice(before.paints.length).filter((key) => after.keys.includes(key)), [], 'a prepared season must paint no visible tile again');
+      const image = await canvasImage(page);
+      if (images[name]) assert.equal(image, images[name], 'revisiting a season must reproduce its own pixels');
+      else {
+        assert.ok(Object.values(images).every((previous) => previous !== image), 'a season switch must change actual map pixels');
+        images[name] = image;
+      }
+    }
+    await screenshot(page, mobile ? 'mobile-cached-seasons' : 'desktop-cached-seasons');
+  });
+}
+
+test('a saved tile is read again after same-session memory eviction without repainting', { timeout: 45000 }, async (t) => {
+  const { page, ready } = await openMap(t, { reducedMotion: 'reduce' });
+  await observeSeasonCache(page);
+  await ready();
+  const state = await page.evaluate(() => window.seasonCache.snapshot());
+  const key = state.keys[0];
+  assert.ok(key.startsWith('summer/0/'), 'the check must use live detail, not a bundled overview');
+  await page.waitForFunction(async (key) => (await window.seasonCache.saved(key)) instanceof Blob && window.seasonCache.miss(key) === undefined, key);
+  await page.waitForFunction(() => !window.seasonCache.snapshot().dirty);
+  const image = await canvasImage(page);
+  const requests = await page.evaluate((key) => {
+    window.withholdPaint = true;
+    const count = window.tilePaintRequests.filter((paint) => paint === key).length;
+    window.seasonCache.evict(key);
+    return count;
+  }, key);
+  await page.waitForFunction((key) => window.seasonCache.has(key) && !window.seasonCache.snapshot().dirty, key);
+  assert.equal(await page.evaluate((key) => window.tilePaintRequests.filter((paint) => paint === key).length, key), requests, 'the saved tile must not be sent to a painter after eviction');
+  assert.equal(await canvasImage(page), image, 'restored storage pixels must match the original tile');
 });
 
 test('reload paints a known saved tile while worker regeneration is withheld', { timeout: 45000 }, async (t) => {

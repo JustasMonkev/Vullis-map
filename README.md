@@ -87,8 +87,9 @@ Tiles are painted in parallel by up to four workers. The viewer asks for them in
 order: the overview first, then half-resolution parents of empty on-screen tiles (so gaps fill
 quickly), then on-screen tiles from the centre outwards, nearby detail zoom levels, and a ring
 just off screen. Startup prepares the three detail levels around the starting view and opening
-glide before revealing the map, with progress and a 15-second preparation limit. Zoom prefetch
-shares the live-tile memory budget with pan prefetch; visible tiles take priority. During a
+glide before revealing the map, with progress and a 15-second preparation limit. The other
+seasons' visible tiles are prepared too, and switching seasons retains cached artwork.
+Zoom and season prefetch share the live-tile memory budget with pan prefetch; visible tiles take priority. During a
 glide it plans for where the camera is going. Painted tiles are also saved to IndexedDB, so
 repeat visits load almost instantly. Bump `VERSION` in `js/shared.js` whenever the renderer
 or data changes, so old saved tiles are thrown away.
@@ -100,6 +101,13 @@ the nearest coarser tile, softly blurred when it is stretched a lot, with any fi
 already painted laid on top. Re-bake after changing the renderer or data, and bump `VERSION`.
 The atlas also records a SHA-256 fingerprint of the renderer and all three datasets.
 CI rejects shipped overview images whose version or source fingerprint is stale.
+All twelve seasonal overviews stay decoded (81 MiB for the bundled map); live detail tiles
+across every season share the existing 185–260 tile budget on typical devices.
+
+Compare startup, first and repeated season switches, and zoom rendering against a prior
+viewer commit with `npm run benchmark -- --baseline <full-commit-SHA>`. Three samples each
+on desktop and mobile emulation are written to `test-results/performance.json`. Mobile uses
+4× main-thread CPU throttling; the network is unthrottled localhost, not a physical phone.
 
 There are seven zoom levels, like an image pyramid. The finest level uses 0.4 iso units per
 art pixel. The viewer always picks a level that magnifies art pixels by 1–2× and falls back
