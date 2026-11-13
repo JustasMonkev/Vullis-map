@@ -289,11 +289,22 @@
     return [(X + s) / 2, (s - X) / 2];
   }
 
+  // Iso-space box that holds the whole diorama (ground, tallest towers, slab).
+  function isoBoundsOf(meta) {
+    const [e0, n0, e1, n1] = meta.bounds;
+    return [isoX(e0, n1), isoY(e1, n1, 60), isoX(e1, n0), isoY(e0, n0, -ISO.SLAB)];
+  }
+  // Tiles of level L that cover the whole diorama.
+  function levelRange(ib, L) {
+    const span = ISO.TILE * ISO.A0 * (1 << L);
+    return { span, tx0: Math.floor(ib[0] / span), ty0: Math.floor(ib[1] / span), tx1: Math.floor(ib[2] / span), ty1: Math.floor(ib[3] / span) };
+  }
+
   // Bump whenever the renderer or the data changes: browsers drop tiles saved by older versions.
   const VERSION = 'r2';
 
   const api = {
-    VERSION, ISO, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
+    VERSION, ISO, isoBoundsOf, levelRange, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
     ringArea, ringCentroid, pointInRing, obb, prepBuilding, Grid, makeSeen,
     worldToLatLon, latLonToWorld, isoToWorld,
   };

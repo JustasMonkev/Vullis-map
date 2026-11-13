@@ -113,11 +113,46 @@
     });
   }
 
+  /* Pre-painted zoomed-out levels (tools/bake_overview.js): one image per level and season.
+     Their tiles go straight into the cache, so far zoom levels never wait for a worker. */
+  const baked = { meta: null, bmp: {}, loading: {}, failed: {} };
+  async function loadAtlasMeta() {
+    try {
+      const r = await fetch(new URL('tiles/atlas.json', location.href).href);
+      if (!r.ok) return;
+      const a = await r.json();
+      if (a.version === window.SIL.VERSION) baked.meta = a;    // stale bakes are ignored
+    } catch (e) { /* no atlas: everything is painted live */ }
+  }
+  const bakedLevel = (L) => baked.meta && baked.meta.levels[L];
+  function loadBaked(sz, L) {
+    const id = sz + '-L' + L, lv = bakedLevel(L);
+    if (!lv || baked.failed[id]) return Promise.resolve();
+    if (!baked.loading[id]) {
+      baked.loading[id] = fetch(new URL('tiles/' + baked.meta.files[id], location.href).href)
+        .then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+        .then((blob) => createImageBitmap(blob))
+        .then((bmp) => {
+          if (sz !== season) { bmp.close(); delete baked.loading[id]; return; }
+          baked.bmp[id] = bmp;
+          for (let r = 0; r < lv.rows; r++) for (let c = 0; c < lv.cols; c++)
+            cache.set(tileKey(L, lv.tx0 + c, lv.ty0 + r), { bmp, sx: c * ISO.TILE, sy: r * ISO.TILE, baked: true, used: frameNo });
+          dirty = true;
+        })
+        .catch(() => { baked.failed[id] = true; delete baked.loading[id]; pump(); });
+    }
+    return baked.loading[id];
+  }
+  // coarsest first: it is tiny and covers everything
+  const loadBakedSeason = (sz) => Promise.all(Object.keys((baked.meta && baked.meta.levels) || {}).map(Number).sort((a, b) => b - a).map((L) => loadBaked(sz, L)));
+
   let wanted = [];
   let lookups = 0;
   function pump() {
     for (const key of wanted) {
       if (cache.has(key) || pending.has(key)) continue;
+      const kl = +key.split('/')[1];
+      if (bakedLevel(kl) && !baked.failed[season + '-L' + kl]) { loadBaked(season, kl); continue; }
       const st = store.state.get(key);
       if (st === 'checking') continue;
       if (st === undefined && store.db) {
@@ -151,7 +186,7 @@
       const [k, v] = arr[i];
       if (v.used === frameNo) break;
       const L = +k.split('/')[1];
-      if (L >= MAXL - 1) continue;                  // keep the overview levels
+      if (v.baked || L >= MAXL - 1) continue;       // keep the overview levels
       v.bmp.close && v.bmp.close();
       cache.delete(k);
     }
@@ -248,29 +283,34 @@
         const key = tileKey(L, tx, ty);
         const X = tx * R.span, Y = ty * R.span;
         const hit = cache.get(key);
-        if (hit) { hit.used = frameNo; drawTileImage(hit.bmp, 0, 0, ISO.TILE, ISO.TILE, X, Y, R.span); continue; }
-        // fallback: children one level finer (zooming out), else the nearest coarser ancestor
-        let drawn = false;
-        if (L > 0) {
-          const ck = [];
-          for (let q = 0; q < 4; q++) ck.push(cache.get(tileKey(L - 1, tx * 2 + (q & 1), ty * 2 + (q >> 1))));
-          if (ck.every(Boolean)) {
-            const half = R.span / 2;
-            ck.forEach((c, q) => { c.used = frameNo; drawTileImage(c.bmp, 0, 0, ISO.TILE, ISO.TILE, X + (q & 1) * half, Y + (q >> 1) * half, half); });
-            drawn = true;
-          }
-        }
-        for (let d = 1; !drawn && L + d <= MAXL; d++) {
+        if (hit) { hit.used = frameNo; drawTileImage(hit.bmp, hit.sx || 0, hit.sy || 0, ISO.TILE, ISO.TILE, X, Y, R.span); continue; }
+        // Not painted yet. Stand-in: the nearest coarser tile, softened when it is stretched a lot
+        // (blocky pixels several times bigger than the art read as broken, blur reads as loading)…
+        for (let d = 1; L + d <= MAXL; d++) {
           const a = cache.get(tileKey(L + d, tx >> d, ty >> d));
           if (!a) continue;
           const sub = ISO.TILE >> d;
           if (sub < 1) break;
           a.used = frameNo;
-          drawTileImage(a.bmp, (tx - ((tx >> d) << d)) * sub, (ty - ((ty >> d) << d)) * sub, sub, sub, X, Y, R.span);
-          drawn = true;
+          const stretch = (R.span * view.s * DPR) / sub;
+          ctx.imageSmoothingEnabled = stretch > 2.5;
+          drawTileImage(a.bmp, (a.sx || 0) + (tx - ((tx >> d) << d)) * sub, (a.sy || 0) + (ty - ((ty >> d) << d)) * sub, sub, sub, X, Y, R.span);
+          ctx.imageSmoothingEnabled = false;
+          break;
+        }
+        // …with any finer tiles that are already painted laid on top (when zooming out).
+        if (L > 0) {
+          const half = R.span / 2;
+          for (let q = 0; q < 4; q++) {
+            const c = cache.get(tileKey(L - 1, tx * 2 + (q & 1), ty * 2 + (q >> 1)));
+            if (!c) continue;
+            c.used = frameNo;
+            drawTileImage(c.bmp, c.sx || 0, c.sy || 0, ISO.TILE, ISO.TILE, X + (q & 1) * half, Y + (q >> 1) * half, half);
+          }
         }
       }
     }
+
     schedule();
     evict();
 
@@ -684,7 +724,9 @@
     document.body.dataset.season = sz;
     document.querySelectorAll('.season button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.season === sz)));
     // drop tiles of other seasons, keeping memory in check
-    for (const [k, v] of cache) if (!k.startsWith(sz + '/')) { v.bmp.close && v.bmp.close(); cache.delete(k); }
+    for (const [k, v] of cache) if (!k.startsWith(sz + '/')) { if (!v.baked && v.bmp.close) v.bmp.close(); cache.delete(k); }
+    for (const id of Object.keys(baked.bmp)) if (!id.startsWith(sz + '-')) { baked.bmp[id].close(); delete baked.bmp[id]; delete baked.loading[id]; }
+    if (baked.meta) loadBakedSeason(sz);
     try { localStorage.setItem('silale-season', sz); } catch (e) { /* storage unavailable */ }
     dirty = true;
   }
@@ -954,11 +996,12 @@
     // Workers load the data in parallel; saved tiles can show before they are ready.
     const workersP = startWorkers(dataUrl);
     workersP.catch((err) => { console.error(err); toast('This browser could not paint new tiles.'); });
+    const atlasP = loadAtlasMeta().then(() => loadBakedSeason(season));
     const data = await fetch(dataUrl).then((r) => r.json());
     D = data; META = D.meta;
     bar.style.width = '55%';
     const [e0, n0, e1, n1] = META.bounds;
-    isoBounds = [isoX(e0, n1), isoY(e1, n1, 60), isoX(e1, n0), isoY(e0, n0, -ISO.SLAB)];
+    isoBounds = window.SIL.isoBoundsOf(META);
     BLD = D.buildings.map((raw, i) => {
       const b = prepBuilding(raw, i);
       b.name = raw.n; b.addr = raw.ad; b.year = raw.y; b.den = raw.den; b.kindName = raw.kind; b.btype = raw.t; b.osm = raw.id;
@@ -973,6 +1016,7 @@
     Object.assign(view, fromHash || homeView());
     clampView();
     window.addEventListener('hashchange', () => { const v = readHash(); if (v) flyTo(v); });
+    await Promise.race([atlasP, new Promise((r) => setTimeout(r, 4000))]);
     requestAnimationFrame(loop);
     // wait until the first screenful is painted (or give up after a few seconds)
     const t0 = performance.now();

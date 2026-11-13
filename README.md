@@ -42,6 +42,8 @@ To publish it, push to GitHub Pages or any static host.
 | `js/shared.js` | Projection, themes and palettes, shared geometry helpers |
 | `data/silale.json` | Town data extracted from OpenStreetMap, in local metres |
 | `tools/build_data.py` | Rebuilds `data/silale.json` from OSM |
+| `tools/bake_overview.js` | Pre-paints zoom levels 3–6 for each season into `tiles/` |
+| `tiles/` | Pre-painted overview images (≈640 KB per season) and `atlas.json` |
 
 ### How a tile is painted
 
@@ -61,6 +63,12 @@ quickly), then on-screen tiles from the centre outwards, then a ring just off sc
 glide it plans for where the camera is going. Painted tiles are also saved to IndexedDB, so
 repeat visits load almost instantly. Bump `VERSION` in `js/shared.js` whenever the renderer
 or data changes, so old saved tiles are thrown away.
+
+The four most zoomed-out levels are pre-painted with the same worker code
+(`node tools/bake_overview.js`) and shipped as lossless WebP images, so zooming out is instant
+and every closer level has a sharp stand-in nearby. Until a tile is painted, the viewer shows
+the nearest coarser tile, softly blurred when it is stretched a lot, with any finer tiles
+already painted laid on top. Re-bake after changing the renderer or data, and bump `VERSION`.
 
 There are seven zoom levels, like an image pyramid. The finest level uses 0.4 iso units per
 art pixel. The viewer always picks a level that magnifies art pixels by 1–2× and falls back
