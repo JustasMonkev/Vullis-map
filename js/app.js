@@ -379,7 +379,7 @@
       const { c, u, l } = b.box;
       for (const s of [-0.5, 0.5]) { const e = c[0] + u[0] * l * s, n = c[1] + u[1] * l * s; pts.push([isoX(e, n), isoY(e, n, b.h + b.rise)]); }
     }
-    if (b.tower) { const t = b.tower; pts.push([isoX(t.c[0], t.c[1]), isoY(t.c[0], t.c[1], t.h + t.spire)]); }
+    if (b.tower) { const t = b.tower; pts.push([isoX(t.c[0], t.c[1]), isoY(t.c[0], t.c[1], b.top)]); }
     return hullOf(pts);
   }
   function inConvex(h, x, y) {
@@ -432,7 +432,7 @@
     BLD.forEach((b) => {
       if (!b.name) return;
       usedNames.add(b.name);
-      const top = b.tower ? b.tower.h + b.tower.spire + 4 : b.h + b.rise + 2;
+      const top = b.top + 2;
       L.push({ t: b.name, X: isoX(b.c[0], b.c[1]), Y: isoY(b.c[0], b.c[1], top), zmin: (PRI[b.kindName] || 4) <= 2 ? 17.8 : 18.9, zmax: 99, size: 13, pri: PRI[b.kindName] || 4, b: b.i });
     });
     for (const p of D.pois) {
@@ -832,8 +832,8 @@
     else if (b.addr) facts.push(['Town', 'Šilalė']);
     if (b.year) facts.push(['Built', b.year]);
     if (b.den) facts.push(['Faith', pretty(b.den)]);
-    const top = b.tower ? b.tower.h + b.tower.spire : b.h + b.rise;
-    facts.push(['Height', `≈ ${Math.round(top)} m${b.tower ? ' (tower)' : ''}`]);
+    facts.push(['Height', `≈ ${Math.round(b.top)} m${b.tower ? ' (tower)' : ''}`]);
+    facts.push(['Height basis', b.heightSource ? b.heightSource.label : 'Estimated from footprint and building type']);
     facts.push(['Footprint', `${Math.round(b.area).toLocaleString('en-US')} m²`]);
     const [lat, lon] = worldToLatLon(META, b.c[0], b.c[1]);
     facts.push(['Location', `${lat.toFixed(5)}, ${lon.toFixed(5)}`]);
@@ -846,6 +846,9 @@
     const osm = $('card-osm');
     const id2 = String(b.osm || '');
     osm.href = id2.startsWith('r') ? `https://www.openstreetmap.org/relation/${id2.slice(1)}` : `https://www.openstreetmap.org/way/${id2}`;
+    const heightSource = $('card-height-source');
+    heightSource.hidden = !b.heightSource?.url;
+    if (b.heightSource?.url) heightSource.href = b.heightSource.url;
     $('card').hidden = false;
     document.body.classList.add('card-open');
     revealBehindCard(b);
@@ -1070,7 +1073,7 @@
     const workersP = startWorkers(dataUrl);
     workersP.catch((err) => { console.error(err); toast('This browser could not paint new tiles.'); });
     const atlasP = loadAtlasMeta().then(() => loadBakedSeason(season));
-    const data = await fetch(dataUrl).then((r) => r.json());
+    const data = await window.SIL.loadMapData(dataUrl);
     D = data; META = D.meta;
     bar.style.width = '55%';
     const [e0, n0, e1, n1] = META.bounds;
@@ -1112,6 +1115,6 @@
   boot().catch((err) => {
     console.error(err);
     const p = document.querySelector('#loader p');
-    p.textContent = 'This browser could not paint the map. Try a current Chrome, Firefox or Safari.';
+    p.textContent = 'The map could not load. Please reload and try again.';
   });
 })();

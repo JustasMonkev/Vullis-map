@@ -68,6 +68,155 @@ async function screenshot(page, name) {
   await page.screenshot({ path: resolve(artifacts, name + '.png') });
 }
 
+async function runPainter(page, body) {
+  const source = await readFile(resolve(root, 'js/worker.js'), 'utf8');
+  const seam = "importScripts('shared.js');";
+  assert.ok(source.includes(seam), 'worker imports the shared renderer');
+  return page.evaluate(({ source, body }) => new Promise((done, reject) => {
+    const shared = new URL('/js/shared.js', location.href).href;
+    const script = `'use strict';\nimportScripts(${JSON.stringify(shared)});\n${source}\n` +
+      `(async () => { ${body} })().then(result => self.postMessage({ type: 'acceptance', result }), error => self.postMessage({ type: 'acceptance-error', message: error.stack || error.message }));`;
+    const url = URL.createObjectURL(new Blob([script], { type: 'text/javascript' }));
+    const worker = new Worker(url);
+    const finish = (error, result) => {
+      clearTimeout(deadline); worker.terminate(); URL.revokeObjectURL(url);
+      if (error) reject(error); else done(result);
+    };
+    const deadline = setTimeout(() => finish(new Error('renderer acceptance worker timed out')), 30000);
+    worker.onerror = (event) => finish(new Error(event.message));
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'acceptance') finish(null, data.result);
+      if (data.type === 'acceptance-error') finish(new Error(data.message));
+    };
+  }), { source: source.replace(seam, ''), body });
+}
+
+async function openPainter(t) {
+  const { page } = await openMap(t, { viewport: { width: 800, height: 600 } });
+  await page.route('**/painter-fixture', (route) => route.fulfill({
+    contentType: 'text/html', body: '<!doctype html><title>Renderer acceptance</title><body style="margin:0;background:#e8e8e0">',
+  }));
+  await page.goto(baseURL + '/painter-fixture');
+  return page;
+}
+
+test('source canopy trees respect real canvas occupancy and leave covered culverts underground', { timeout: 45000 }, async (t) => {
+  const page = await openPainter(t);
+  const result = await runPainter(page, `
+    D = {
+      meta: { bounds: [-100, -100, 100, 100], lat0: 0, lon0: 0, mLat: 1, mLon: 1 },
+      landcover: { crs: 'EPSG:4326', width: 2, height: 1, transform: [-100, 100, 0, 100, 0, -200], nodata: 0, encoding: 'rle-count-value', data: [1, 10, 1, 30] },
+      areas: [
+        { k: 'forest', r: [[-90, -90, 90, -90, 90, 90, -90, 90]] },
+        { k: 'water', r: [[-80, 35, -35, 35, -35, 65, -80, 65]] }
+      ],
+      buildings: [{ r: [-60, -10, -30, -10, -30, 20, -60, 20], h: 6, roof: 'flat', m: 'house' }],
+      roads: [{ c: 'residential', p: [-90, -40, 90, -40], w: 12 }],
+      waterways: [
+        { c: 'stream', p: [-15, -70, -15, 70], w: 8 },
+        { c: 'stream', p: [-75, -80, -75, -50], w: 10, covered: 1 }
+      ],
+      barriers: [], trees: [], treeRows: []
+    };
+    prepare();
+    const trees = Array.from(TR.e, (e, i) => [e, TR.n_[i]]);
+    const preview = new OffscreenCanvas(512, 512), ctx = preview.getContext('2d');
+    for (let ty = -1; ty <= 0; ty++) for (let tx = -1; tx <= 0; tx++) {
+      paintTile(1, tx, ty, 'summer'); ctx.drawImage(canvas, (tx + 1) * 256, (ty + 1) * 256);
+    }
+    return { trees, image: new FileReaderSync().readAsDataURL(await preview.convertToBlob()) };
+  `);
+  assert.ok(result.trees.length > 100, 'canopy must produce enough trees to exercise exclusions');
+  for (const [e, n] of result.trees) {
+    assert.ok(e < 0, 'grass-class pixels must not grow inferred canopy');
+    assert.ok(Math.abs(n + 40) >= 4, 'the measured road carriageway stays clear');
+    assert.ok(!(e > -60 && e < -30 && n > -10 && n < 20), 'building interior stays clear');
+    assert.ok(!(e > -80 && e < -35 && n > 35 && n < 65), 'open water stays clear');
+    assert.ok(!(Math.abs(e + 15) < 2 && n > -70 && n < 70), 'open stream stays clear');
+  }
+  assert.ok(result.trees.some(([e, n]) => e > -79 && e < -71 && n > -78 && n < -55), 'covered stream must not cut a visible clearing through canopy');
+  await page.evaluate((image) => { const img = document.createElement('img'); img.src = image; document.body.append(img); return img.decode(); }, result.image);
+  await screenshot(page, 'source-canopy-occupancy');
+});
+
+test('real pixels distinguish bridge decks, mapped road surfaces and underground water', { timeout: 45000 }, async (t) => {
+  const page = await openPainter(t);
+  const result = await runPainter(page, `
+    const base = {
+      meta: { bounds: [-100, -100, 200, 100], lat0: 0, lon0: 0, mLat: 1, mLon: 1 },
+      landcover: { crs: 'EPSG:4326', width: 1, height: 1, transform: [-100, 300, 0, 100, 0, -200], nodata: 0, encoding: 'rle-count-value', data: [1, 30] },
+      areas: [], buildings: [], roads: [], waterways: [], barriers: [], trees: [], treeRows: []
+    };
+    const images = {}, centers = {}, preview = new OffscreenCanvas(768, 512), ctx = preview.getContext('2d');
+    const road = { c: 'residential', p: [64, -65, 64, 65], w: 10 };
+    const water = { c: 'stream', p: [-20, 0, 150, 0], w: 18 };
+    const scenes = [
+      ['asphalt', [{ ...road, s: 'asphalt' }], []],
+      ['paving', [{ ...road, s: 'paving_stones' }], []],
+      ['gravel', [{ ...road, s: 'gravel' }], []],
+      ['covered', [{ ...road, s: 'asphalt' }], [{ ...water, covered: 1 }]],
+      ['open', [{ ...road, s: 'asphalt' }], [water]],
+      ['ordinary', [{ c: 'footway', p: road.p, w: 8, s: 'asphalt' }, { c: 'primary', p: water.p, w: 12, s: 'gravel' }], [water]],
+      ['bridge', [{ c: 'footway', p: road.p, w: 8, s: 'asphalt', br: 1 }, { c: 'primary', p: water.p, w: 12, s: 'gravel' }], [water]]
+    ];
+    for (let i = 0; i < scenes.length; i++) {
+      const [name, roads, waterways] = scenes[i];
+      D = { ...base, roads, waterways }; prepare(); paintTile(0, 0, -1, 'summer');
+      images[name] = new FileReaderSync().readAsDataURL(await canvas.convertToBlob());
+      centers[name] = Array.from(g.getImageData(160, 176, 1, 1).data);
+      if (name === 'asphalt' || name === 'paving' || name === 'gravel') ctx.drawImage(canvas, i * 256, 0);
+      if (name === 'ordinary' || name === 'bridge') ctx.drawImage(canvas, (i - 5) * 256, 256);
+    }
+    return { images, centers, preview: new FileReaderSync().readAsDataURL(await preview.convertToBlob()) };
+  `);
+  assert.notEqual(result.images.asphalt, result.images.paving, 'paving must paint its mapped surface');
+  assert.notEqual(result.images.asphalt, result.images.gravel, 'gravel must paint its mapped surface');
+  assert.notEqual(result.images.paving, result.images.gravel);
+  assert.equal(result.images.covered, result.images.asphalt, 'covered water must leave no visible stream pixels');
+  assert.notEqual(result.images.open, result.images.covered, 'open water must remain visible outside the crossing');
+  assert.notDeepEqual(result.centers.bridge, result.centers.ordinary, 'the bridge deck must paint above the intersecting ground road');
+  assert.deepEqual(result.centers.bridge, result.centers.asphalt, 'the bridge keeps its mapped asphalt across the crossing');
+  await page.evaluate((image) => { const img = document.createElement('img'); img.src = image; document.body.append(img); return img.decode(); }, result.preview);
+  await screenshot(page, 'bridge-surface-culvert-pixels');
+});
+
+test('the published church tower height survives loading and appears with its source in every season', { timeout: 60000 }, async (t) => {
+  const { page, ready } = await openMap(t, { reducedMotion: 'reduce' });
+  await ready();
+  const landmark = await page.evaluate(async () => {
+    const data = await window.SIL.loadMapData(new URL('data/silale.json', location.href).href);
+    const index = data.buildings.findIndex((building) => building.id === '212787870');
+    const raw = data.buildings[index], model = window.SIL.prepBuilding(raw, index);
+    return { name: raw.n, top: model.top, towerTip: model.tower.h + model.tower.spire + model.tower.cross, source: model.heightSource };
+  });
+  assert.equal(landmark.top, 60);
+  assert.equal(landmark.towerTip, 60, 'the cross must fit inside the published total tower height');
+  assert.equal(landmark.source.quality, 'approximate');
+  await page.locator('#q').fill(landmark.name);
+  await page.locator('#q').press('Enter');
+  await page.locator('#card').waitFor({ state: 'visible' });
+  const facts = await page.locator('#card-facts').evaluate((list) => Object.fromEntries([...list.querySelectorAll('dt')].map((term) => [term.textContent, term.nextElementSibling.textContent])));
+  assert.equal(facts.Height, '≈ 60 m (tower)');
+  assert.equal(facts['Height basis'], landmark.source.label);
+  assert.equal(await page.locator('#card-height-source').getAttribute('href'), 'https://silale.lt/en/tourism/');
+  assert.equal(await page.locator('#card-height-source').isVisible(), true);
+  await painted(page); await screenshot(page, 'source-church-summer');
+  for (const season of ['winter', 'night']) {
+    const previous = await canvasImage(page);
+    await page.getByRole('radio', { name: season[0].toUpperCase() + season.slice(1) }).click();
+    await page.waitForFunction((previous) => document.querySelector('#map').toDataURL() !== previous, previous);
+    await painted(page);
+    assert.equal(await page.locator('body').getAttribute('data-season'), season);
+    await screenshot(page, 'source-church-' + season);
+  }
+  await page.locator('#card-close').click();
+  await page.getByRole('radio', { name: 'Summer' }).click();
+  await page.locator('#q').fill('55.490626, 22.173438');
+  await page.locator('#q').press('Enter');
+  await page.waitForFunction(() => document.querySelector('#readout').textContent.startsWith('55.49063'));
+  await painted(page); await screenshot(page, 'source-bridge');
+});
+
 // Execute the actual painter in Chromium. Only the boot and unrelated UI are
 // suppressed; the regression exercises real alpha compositing, not a canvas mock.
 test('transparent finer tiles replace stale coarser pixels', async (t) => {

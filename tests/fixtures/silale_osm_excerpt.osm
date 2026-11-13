@@ -1,0 +1,186 @@
+<?xml version='1.0' encoding='utf-8'?>
+<osm version="0.6" generator="openstreetmap-cgimap 2.1.1 (3982828 spike-08.openstreetmap.org)" copyright="OpenStreetMap and contributors" attribution="http://www.openstreetmap.org/copyright" license="http://opendatacommons.org/licenses/odbl/1-0/">
+  <note>Curated OpenStreetMap excerpt. Source: https://api.openstreetmap.org/api/0.6/map?bbox=22.146,55.474,22.226,55.510 ; retrieved 2026-11-13 ; source SHA-256 9b9040fa06e1551dc0cfee7a1ebff2bdb4b210770af21a8f7f51cc04c8da65b6 . Data © OpenStreetMap contributors, ODbL 1.0.</note>
+  <bounds minlat="55.4740000" minlon="22.1460000" maxlat="55.5100000" maxlon="22.2260000" />
+  <node id="1080622804" visible="true" version="3" timestamp="2021-10-25T07:44:04Z" lat="55.4926759" lon="22.1813770">
+    <tag k="water" v="dam" />
+  </node>
+  <node id="1080639630" visible="true" version="4" timestamp="2026-03-09T12:45:34Z" lat="55.4926311" lon="22.1809423" />
+  <node id="2225732080" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918402" lon="22.1856400" />
+  <node id="2225732082" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918461" lon="22.1836412" />
+  <node id="2225732083" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918461" lon="22.1857609" />
+  <node id="2225732084" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918473" lon="22.1837641" />
+  <node id="2225732086" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918555" lon="22.1835390" />
+  <node id="2225732087" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918567" lon="22.1854899" />
+  <node id="2225732088" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918602" lon="22.1839892" />
+  <node id="2225732090" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918650" lon="22.1858776" />
+  <node id="2225732093" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918803" lon="22.1834244" />
+  <node id="2225732094" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918803" lon="22.1844207" />
+  <node id="2225732095" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918803" lon="22.1853044" />
+  <node id="2225732096" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918933" lon="22.1847375" />
+  <node id="2225732097" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4918957" lon="22.1860131" />
+  <node id="2225732098" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4919004" lon="22.1850752" />
+  <node id="2225732100" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4919028" lon="22.1848626" />
+  <node id="2225732104" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4919205" lon="22.1832556" />
+  <node id="2225732105" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4919205" lon="22.1861215" />
+  <node id="2225732110" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4919358" lon="22.1862403" />
+  <node id="2225732113" visible="true" version="2" timestamp="2014-07-25T12:56:28Z" lat="55.4919476" lon="22.1864816" />
+  <node id="2225732115" visible="true" version="1" timestamp="2013-03-26T17:56:49Z" lat="55.4919748" lon="22.1830951" />
+  <node id="2225732119" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4920480" lon="22.1828595" />
+  <node id="2225732120" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4920881" lon="22.1827553" />
+  <node id="2225732121" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4921377" lon="22.1826407" />
+  <node id="2225732123" visible="true" version="2" timestamp="2015-12-12T13:45:10Z" lat="55.4921780" lon="22.1825711" />
+  <node id="2225732124" visible="true" version="2" timestamp="2015-12-12T13:45:10Z" lat="55.4922435" lon="22.1824835" />
+  <node id="2225732134" visible="true" version="2" timestamp="2015-12-12T13:45:10Z" lat="55.4923249" lon="22.1823761" />
+  <node id="2225732136" visible="true" version="2" timestamp="2015-12-12T13:45:10Z" lat="55.4923989" lon="22.1822787" />
+  <node id="2225732140" visible="true" version="2" timestamp="2015-12-12T13:45:10Z" lat="55.4924625" lon="22.1821580" />
+  <node id="2225732141" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4924713" lon="22.1812484" />
+  <node id="2225732142" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4924825" lon="22.1814068" />
+  <node id="2225732143" visible="true" version="2" timestamp="2015-12-12T13:45:10Z" lat="55.4924953" lon="22.1820721" />
+  <node id="2225732144" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4924943" lon="22.1815589" />
+  <node id="2225732145" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4925038" lon="22.1817048" />
+  <node id="2225732146" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4925109" lon="22.1818132" />
+  <node id="2225732148" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4925132" lon="22.1819987" />
+  <node id="2225732149" visible="true" version="1" timestamp="2013-03-26T17:56:50Z" lat="55.4925156" lon="22.1819008" />
+  <node id="2225826593" visible="true" version="5" timestamp="2025-12-01T10:19:38Z" lat="55.4942518" lon="22.1830034" />
+  <node id="2225826595" visible="true" version="1" timestamp="2013-03-26T18:52:27Z" lat="55.4944415" lon="22.1837742" />
+  <node id="2225826597" visible="true" version="2" timestamp="2024-01-01T13:04:28Z" lat="55.4946670" lon="22.1846379" />
+  <node id="2225826599" visible="true" version="1" timestamp="2013-03-26T18:52:27Z" lat="55.4949108" lon="22.1854967" />
+  <node id="2936822039" visible="true" version="1" timestamp="2014-06-28T11:08:05Z" lat="55.4919643" lon="22.1831261" />
+  <node id="2950761690" visible="true" version="1" timestamp="2014-07-06T11:57:27Z" lat="55.4955232" lon="22.1781656" />
+  <node id="2950761691" visible="true" version="1" timestamp="2014-07-06T11:57:27Z" lat="55.4954028" lon="22.1782395" />
+  <node id="2950761692" visible="true" version="1" timestamp="2014-07-06T11:57:27Z" lat="55.4953878" lon="22.1781728" />
+  <node id="2950761693" visible="true" version="1" timestamp="2014-07-06T11:57:27Z" lat="55.4952984" lon="22.1782373" />
+  <node id="2950761694" visible="true" version="1" timestamp="2014-07-06T11:57:27Z" lat="55.4953580" lon="22.1785433" />
+  <node id="2950761695" visible="true" version="1" timestamp="2014-07-06T11:57:27Z" lat="55.4955706" lon="22.1784118" />
+  <node id="2979181228" visible="true" version="1" timestamp="2014-07-25T12:56:28Z" lat="55.4919676" lon="22.1867555" />
+  <node id="2979181229" visible="true" version="1" timestamp="2014-07-25T12:56:28Z" lat="55.4919676" lon="22.1869378" />
+  <node id="2979181230" visible="true" version="1" timestamp="2014-07-25T12:56:28Z" lat="55.4919341" lon="22.1871712" />
+  <node id="2979181231" visible="true" version="2" timestamp="2025-12-02T09:12:14Z" lat="55.4919102" lon="22.1873579" />
+  <node id="2979181232" visible="true" version="2" timestamp="2025-12-02T09:12:14Z" lat="55.4919068" lon="22.1874718" />
+  <node id="2979182633" visible="true" version="2" timestamp="2025-12-02T09:12:14Z" lat="55.4919072" lon="22.1875550" />
+  <node id="2979288123" visible="true" version="2" timestamp="2014-08-14T12:52:40Z" lat="55.4894932" lon="22.1883868" />
+  <node id="3016378269" visible="true" version="1" timestamp="2014-08-14T12:52:39Z" lat="55.4893652" lon="22.1888796" />
+  <node id="3016378272" visible="true" version="1" timestamp="2014-08-14T12:52:39Z" lat="55.4892308" lon="22.1894172" />
+  <node id="3016378293" visible="true" version="5" timestamp="2026-08-03T17:27:57Z" lat="55.4895253" lon="22.1882579">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:island" v="yes" />
+    <tag k="crossing:markings" v="zebra" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="3016378296" visible="true" version="5" timestamp="2026-08-03T17:27:57Z" lat="55.4891986" lon="22.1895441">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:island" v="no" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="3016482204" visible="true" version="1" timestamp="2014-08-14T13:56:28Z" lat="55.4924783" lon="22.1813476" />
+  <node id="3889072993" visible="true" version="1" timestamp="2015-12-12T13:38:11Z" lat="55.4918713" lon="22.1876478" />
+  <node id="11476146977" visible="true" version="2" timestamp="2025-12-01T10:19:38Z" lat="55.4943670" lon="22.1834792" />
+  <node id="13352196887" visible="true" version="1" timestamp="2025-12-03T23:44:49Z" lat="55.4924761" lon="22.1813168" />
+  <way id="93223051" visible="true" version="8" timestamp="2016-10-21T09:43:06Z">
+    <nd ref="1080622804" />
+    <nd ref="1080639630" />
+    <tag k="layer" v="-1" />
+    <tag k="source" v="public_document" />
+    <tag k="source_ref" v="Rietavo sav. bendrasis planas" />
+    <tag k="tunnel" v="culvert" />
+    <tag k="waterway" v="stream" />
+  </way>
+  <way id="212760644" visible="true" version="10" timestamp="2025-12-03T23:44:49Z">
+    <nd ref="2225732141" />
+    <nd ref="13352196887" />
+    <nd ref="3016482204" />
+    <nd ref="2225732142" />
+    <nd ref="2225732144" />
+    <nd ref="2225732145" />
+    <nd ref="2225732146" />
+    <nd ref="2225732149" />
+    <nd ref="2225732148" />
+    <nd ref="2225732143" />
+    <nd ref="2225732140" />
+    <nd ref="2225732136" />
+    <nd ref="2225732134" />
+    <nd ref="2225732124" />
+    <nd ref="2225732123" />
+    <nd ref="2225732121" />
+    <nd ref="2225732120" />
+    <nd ref="2225732119" />
+    <nd ref="2225732115" />
+    <nd ref="2936822039" />
+    <nd ref="2225732104" />
+    <nd ref="2225732093" />
+    <nd ref="2225732086" />
+    <nd ref="2225732082" />
+    <nd ref="2225732084" />
+    <nd ref="2225732088" />
+    <nd ref="2225732094" />
+    <nd ref="2225732096" />
+    <nd ref="2225732100" />
+    <nd ref="2225732098" />
+    <nd ref="2225732095" />
+    <nd ref="2225732087" />
+    <nd ref="2225732080" />
+    <nd ref="2225732083" />
+    <nd ref="2225732090" />
+    <nd ref="2225732097" />
+    <nd ref="2225732105" />
+    <nd ref="2225732110" />
+    <nd ref="2225732113" />
+    <nd ref="2979181228" />
+    <nd ref="2979181229" />
+    <nd ref="2979181230" />
+    <nd ref="2979181231" />
+    <nd ref="2979181232" />
+    <nd ref="2979182633" />
+    <nd ref="3889072993" />
+    <tag k="bicycle" v="designated" />
+    <tag k="foot" v="designated" />
+    <tag k="highway" v="path" />
+    <tag k="segregated" v="yes" />
+    <tag k="surface" v="paving_stones" />
+  </way>
+  <way id="291605405" visible="true" version="4" timestamp="2020-05-09T14:20:10Z">
+    <nd ref="2950761690" />
+    <nd ref="2950761691" />
+    <nd ref="2950761692" />
+    <nd ref="2950761693" />
+    <nd ref="2950761694" />
+    <nd ref="2950761695" />
+    <nd ref="2950761690" />
+    <tag k="addr:city" v="Šilalė" />
+    <tag k="addr:housenumber" v="23" />
+    <tag k="addr:postcode" v="75132" />
+    <tag k="addr:street" v="M. Valančiaus g." />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="1" />
+  </way>
+  <way id="294504775" visible="true" version="12" timestamp="2026-08-03T17:27:57Z">
+    <nd ref="3016378293" />
+    <nd ref="2979288123" />
+    <nd ref="3016378269" />
+    <nd ref="3016378272" />
+    <nd ref="3016378296" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="3" />
+    <tag k="lanes:backward" v="1" />
+    <tag k="lanes:forward" v="2" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="J. Basanavičiaus g." />
+    <tag k="name:etymology:wikidata" v="Q363949" />
+    <tag k="official_name" v="Jono Basanavičiaus gatvė" />
+    <tag k="ref" v="4513" />
+    <tag k="sidewalk:both" v="separate" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="403173579" visible="true" version="3" timestamp="2025-12-01T10:19:38Z">
+    <nd ref="2225826599" />
+    <nd ref="2225826597" />
+    <nd ref="2225826595" />
+    <nd ref="11476146977" />
+    <nd ref="2225826593" />
+    <tag k="highway" v="residential" />
+    <tag k="lane_markings" v="no" />
+    <tag k="name" v="Saulėtekio g." />
+    <tag k="width" v="4" />
+  </way>
+</osm>

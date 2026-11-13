@@ -2,9 +2,18 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { createHash } = require('node:crypto');
 const { SIL } = require('../js/shared.js');
 const atlas = require('../tiles/atlas.json');
 const { meta } = require('../data/silale.json');
+
+test('shipped overviews identify the exact renderer and source data they were painted from', () => {
+  const hash = createHash('sha256');
+  for (const name of ['js/shared.js', 'js/worker.js', 'data/silale.json', 'data/landcover.json', 'data/landmarks.json']) {
+    hash.update(name).update('\0').update(fs.readFileSync(path.join(__dirname, '..', name))).update('\0');
+  }
+  assert.equal(atlas.sourceHash, hash.digest('hex'), 'rebuild overview images after changing renderer or map sources');
+});
 
 test('shipped overviews match the renderer version and cover every season and overview level', () => {
   assert.equal(atlas.version, SIL.VERSION, 'rebake tiles after changing the renderer');
