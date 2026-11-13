@@ -160,7 +160,7 @@
   // coarsest first: it is tiny and covers everything
   const loadBakedSeason = (sz) => Promise.all(Object.keys((baked.meta && baked.meta.levels) || {}).map(Number).sort((a, b) => b - a).map((L) => loadBaked(sz, L)));
 
-  let wanted = [], wantedSet = new Set();
+  let wanted = [], wantedSet = new Set(), prepared = [], openingFocus = null;
   let lookups = 0;
   function pump() {
     for (const key of wanted) {
@@ -244,11 +244,25 @@
     return true;
   };
 
+  function zoomTiles(v) {
+    const tiles = [];
+    for (let L = 2; L >= 0; L--) {
+      if (bakedLevel(L)) continue;
+      // The widest screenful in each detail band also covers its closer zooms.
+      const R = tileRange(L, { ...v, s: 1 / (ISO.A0 * (1 << L)) });
+      if (R.empty) continue;
+      for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++)
+        tiles.push([Math.hypot(tx + 0.5 - v.x / R.span, ty + 0.5 - v.y / R.span), tileKey(L, tx, ty)]);
+    }
+    return tiles.sort((a, b) => a[0] - b[0]).map(([, key]) => key);
+  }
+
   /* Decide what the workers paint next, most useful first:
      1. the overview level (always kept, it is the fallback for everything),
      2. half-resolution parents of missing on-screen tiles, so gaps fill fast,
      3. on-screen tiles at the right level, nearest the centre first,
-     4. a ring of tiles just off screen, so short pans are already painted.
+     4. detail levels around the centre, so zooming uses prepared tiles,
+     5. a ring of tiles just off screen, so short pans are already painted.
      While gliding, plan for where the camera is going, not where it is. */
   function schedule() {
     const v = anim ? anim.target : view;
@@ -270,6 +284,22 @@
       }
       [...parents].sort((a, b) => a[1] - b[1]).forEach(([k]) => out.push(k));
       vis.sort((a, b) => a[0] - b[0]).forEach(([, k]) => out.push(k));
+    }
+    const planned = new Set(out);
+    const liveKey = (k) => {
+      const L = +k.split('/')[1];
+      return L < MAXL - 1 && (!bakedLevel(L) || baked.failed[season + '-L' + L]);
+    };
+    let liveWanted = [...planned].filter(liveKey).length;
+    const zoom = zoomTiles(v).concat(openingFocus ? zoomTiles(openingFocus) : []);
+    for (const key of zoom) {
+      if (planned.has(key)) continue;
+      if (liveWanted >= CACHE_MAX - 4) break;
+      planned.add(key); out.push(key); liveWanted++;
+    }
+    prepared = [...planned];
+    if (!R.empty) {
+      const cx = v.x / R.span, cy = v.y / R.span;
       if (!anim) {
         const RR = tileRange(L, v, 1), ring = [];
         for (let ty = RR.ty0; ty <= RR.ty1; ty++) for (let tx = RR.tx0; tx <= RR.tx1; tx++) {
@@ -277,13 +307,12 @@
           ring.push([Math.hypot(tx + 0.5 - cx, ty + 0.5 - cy), tileKey(L, tx, ty)]);
         }
         // prefetch only as many as the live-tile budget has room for
-        const liveWanted = out.filter((k) => { const kl = +k.split('/')[1]; return !bakedLevel(kl) && kl < MAXL - 1; }).length;
         const room = Math.max(0, CACHE_MAX - liveWanted - 4);
         ring.sort((a, b) => a[0] - b[0]).slice(0, room).forEach(([, k]) => out.push(k));
       }
     }
-    wanted = out;
     wantedSet = new Set(out);
+    wanted = [...wantedSet];
     pump();
   }
 
@@ -1061,6 +1090,19 @@
   }
 
   // ------------------------------------------------------------ boot
+  function waitForPreparedTiles() {
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        const ready = prepared.filter((key) => cache.has(key)).length;
+        $('loadbar').style.width = (55 + 45 * ready / Math.max(1, prepared.length)) + '%';
+        if (ready === prepared.length || performance.now() - t0 >= 15000) resolve();
+        else setTimeout(check, 120);
+      };
+      check();
+    });
+  }
+
   async function boot() {
     resize();
     window.addEventListener('resize', resize);
@@ -1091,21 +1133,14 @@
     const fromHash = readHash();
     Object.assign(view, fromHash || homeView());
     clampView();
+    if (!fromHash && !reduceMotion) openingFocus = { x: 0, y: 0 };
     window.addEventListener('hashchange', () => { const v = readHash(); if (v) { cancelCardSoon(); flyTo(v); } });
     await Promise.race([atlasP, new Promise((r) => setTimeout(r, 4000))]);
+    document.querySelector('#loader p').textContent = 'Preparing zoom levels';
+    schedule();
     requestAnimationFrame(loop);
-    // wait until the first screenful is painted (or give up after a few seconds)
-    const t0 = performance.now();
-    await new Promise((res) => {
-      const check = () => {
-        const L = levelFor(view.s), R = tileRange(L);
-        let total = 0, ready = 0;
-        for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) { total++; if (cache.has(tileKey(L, tx, ty))) ready++; }
-        bar.style.width = (55 + (45 * ready) / Math.max(1, total)) + '%';
-        if (ready >= total || performance.now() - t0 > 9000) res(); else setTimeout(check, 120);
-      };
-      check();
-    });
+    await waitForPreparedTiles();
+    openingFocus = null;
     $('loader').classList.add('done');
     setTimeout(maybeHint, 3600);
     setTimeout(() => ($('loader').hidden = true), 600);

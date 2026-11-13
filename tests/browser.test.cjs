@@ -301,6 +301,83 @@ test('transparent finer tiles replace stale coarser pixels', async (t) => {
   assert.deepEqual(pixels.coarse, [255, 0, 0, 255], 'uncovered parent still provides fallback');
 });
 
+for (const mobile of [false, true]) {
+  test(`startup prepares zoom detail for immediate reuse on ${mobile ? 'mobile' : 'desktop'}`, { timeout: 60000 }, async (t) => {
+    const { page } = await openMap(t, {
+      reducedMotion: 'reduce', viewport: { width: mobile ? 390 : 1280, height: mobile ? 844 : 900 },
+      isMobile: mobile, hasTouch: mobile,
+    });
+    await page.addInitScript(() => {
+      const post = Worker.prototype.postMessage;
+      const held = [];
+      let holdNextDetail = true;
+      window.paintRequests = [];
+      window.heldZoomTile = null;
+      window.releaseZoomTile = () => {
+        for (const [worker, args] of held.splice(0)) post.apply(worker, args);
+      };
+      Worker.prototype.postMessage = function (message, ...args) {
+        if (message.type === 'tile') {
+          window.paintRequests.push(message.key);
+          if (holdNextDetail && message.L === 2) {
+            holdNextDetail = false;
+            window.heldZoomTile = message.key;
+            held.push([this, [message, ...args]]);
+            return;
+          }
+        }
+        return post.call(this, message, ...args);
+      };
+    });
+    await page.route('**/js/app.js', async (route) => {
+      const source = await readFile(resolve(root, 'js/app.js'), 'utf8');
+      const seam = '  boot().catch((err) => {';
+      assert.ok(source.includes(seam), 'test seam must match the app boot call');
+      const injected = `
+        function visibleKeys(scale) {
+          const L = levelFor(scale), R = tileRange(L, { ...view, s: scale });
+          const keys = [];
+          for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) keys.push(tileKey(L, tx, ty));
+          return keys;
+        }
+        window.zoomPreparation = {
+          initialReady: () => isoBounds && visibleKeys(view.s).every(key => cache.has(key)),
+          snapshot: () => ({ prepared: [...prepared], cached: [...cache.keys()], paints: [...window.paintRequests], ms: performance.now() }),
+          zoom(scale) {
+            const keys = visibleKeys(scale);
+            const missing = keys.filter(key => !cache.has(key));
+            zoomAt(W / 2, H / 2, scale / view.s);
+            render();
+            return { keys, missing };
+          },
+        };
+      `;
+      await route.fulfill({ contentType: 'text/javascript', body: source.replace(seam, injected + seam) });
+    });
+    await page.goto(baseURL + '/#19/55.49043/22.18627');
+    await page.waitForFunction(() => window.heldZoomTile && window.zoomPreparation.initialReady());
+    assert.equal(await page.locator('#loader').isVisible(), true, 'the loader must wait for another zoom band after the opening screen is painted');
+    await page.evaluate(() => window.releaseZoomTile());
+    await page.locator('#loader').waitFor({ state: 'hidden', timeout: 30000 });
+    await painted(page);
+    const initial = await page.evaluate(() => window.zoomPreparation.snapshot());
+    assert.ok(initial.prepared.every((key) => initial.cached.includes(key)), 'startup must cache its complete bounded preparation set');
+    const results = [];
+    for (let cycle = 0; cycle < 2; cycle++) for (const scale of [0.625, 1.25, 2.5, 12]) {
+      const result = await page.evaluate((scale) => window.zoomPreparation.zoom(scale), scale);
+      assert.deepEqual(result.missing, [], `scale ${scale} must have exact detail before the zoom frame`);
+      assert.ok(result.keys.length > 0);
+      results.push(...result.keys);
+    }
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const after = await page.evaluate(() => window.zoomPreparation.snapshot());
+    const repaintedVisible = after.paints.slice(initial.paints.length).filter((key) => results.includes(key));
+    assert.deepEqual(repaintedVisible, [], 'repeated prepared zooms must send no visible tile back to a painter');
+    t.diagnostic(JSON.stringify({ device: mobile ? 'mobile' : 'desktop', coldLoadMs: Math.round(initial.ms), preparedTiles: initial.prepared.length, startupPaintRequests: initial.paints.length, zoomVisibleMisses: 0, zoomVisibleRepaints: repaintedVisible.length }));
+    await screenshot(page, mobile ? 'mobile-prepared-zoom' : 'desktop-prepared-zoom');
+  });
+}
+
 test('rapid wheel and button zoom keeps rendering and interrupts a home glide', { timeout: 45000 }, async (t) => {
   const { page, ready } = await openMap(t);
   await ready(); await painted(page); await screenshot(page, 'desktop-close');
@@ -374,7 +451,7 @@ test('late season atlases cannot replace the selected summer rendering', { timeo
     window.decodedAtlases = 0;
     window.createImageBitmap = async (...args) => {
       const bitmap = await decode(...args);
-      window.decodedAtlases++;
+      if (args[0] instanceof Blob && args[0].type === 'image/webp') window.decodedAtlases++;
       return bitmap;
     };
   });

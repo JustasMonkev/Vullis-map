@@ -85,7 +85,10 @@ viewports. GitHub Actions runs it and rebuilds the overview images for every sea
 
 Tiles are painted in parallel by up to four workers. The viewer asks for them in priority
 order: the overview first, then half-resolution parents of empty on-screen tiles (so gaps fill
-quickly), then on-screen tiles from the centre outwards, then a ring just off screen. During a
+quickly), then on-screen tiles from the centre outwards, nearby detail zoom levels, and a ring
+just off screen. Startup prepares the three detail levels around the starting view and opening
+glide before revealing the map, with progress and a 15-second preparation limit. Zoom prefetch
+shares the live-tile memory budget with pan prefetch; visible tiles take priority. During a
 glide it plans for where the camera is going. Painted tiles are also saved to IndexedDB, so
 repeat visits load almost instantly. Bump `VERSION` in `js/shared.js` whenever the renderer
 or data changes, so old saved tiles are thrown away.
