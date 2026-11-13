@@ -1,0 +1,44 @@
+{
+ "version": "r3",
+ "tile": 256,
+ "levels": {
+  "3": {
+   "tx0": -6,
+   "ty0": -3,
+   "cols": 12,
+   "rows": 6
+  },
+  "4": {
+   "tx0": -3,
+   "ty0": -2,
+   "cols": 6,
+   "rows": 4
+  },
+  "5": {
+   "tx0": -2,
+   "ty0": -1,
+   "cols": 4,
+   "rows": 2
+  },
+  "6": {
+   "tx0": -1,
+   "ty0": -1,
+   "cols": 2,
+   "rows": 2
+  }
+ },
+ "files": {
+  "summer-L3": "summer-L3.webp",
+  "winter-L3": "winter-L3.webp",
+  "night-L3": "night-L3.webp",
+  "summer-L4": "summer-L4.webp",
+  "winter-L4": "winter-L4.webp",
+  "night-L4": "night-L4.webp",
+  "summer-L5": "summer-L5.webp",
+  "winter-L5": "winter-L5.webp",
+  "night-L5": "night-L5.webp",
+  "summer-L6": "summer-L6.webp",
+  "winter-L6": "winter-L6.webp",
+  "night-L6": "night-L6.webp"
+ }
+}

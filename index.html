@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Isometric Šilalė</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A pixel-art isometric map of Šilalė, Lithuania, painted in your browser from OpenStreetMap data.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-season="summer">
+<main id="stage" aria-label="Isometric map of Šilalė">
+  <canvas id="map" tabindex="0" aria-label="Map. Drag to pan, scroll to zoom."></canvas>
+  <div id="note-pin" hidden><span id="note-text"></span></div>
+</main>
+
+<header class="topbar">
+  <div class="brand panel">
+    <h1>Isometric <span>Šilalė</span></h1>
+    <p class="sub">Tauragė County, Lithuania</p>
+    <button class="icon-btn" id="about-btn" aria-label="About this map" title="About">?</button>
+  </div>
+  <div class="tools">
+    <div class="search panel" role="search">
+      <label for="q" class="sr">Search places, streets and addresses</label>
+      <svg class="lens" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2a5 5 0 1 1 0 10A5 5 0 0 1 7 2zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm4.2 6.8 3.3 3.3-1.4 1.4-3.3-3.3z"/></svg>
+      <input id="q" type="search" enterkeyhint="search" autocomplete="off" spellcheck="false" placeholder="Search Šilalė" aria-controls="results" aria-expanded="false">
+      <button class="clear" id="q-clear" type="button" aria-label="Clear search" hidden>×</button>
+      <kbd>/</kbd>
+      <ul id="results" role="listbox" hidden></ul>
+    </div>
+    <button class="btn panel" id="dice" title="Surprise me (R)" aria-label="Surprise me">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12v12H2z" fill="none" stroke="currentColor" stroke-width="2"/><rect x="4" y="4" width="2" height="2"/><rect x="10" y="4" width="2" height="2"/><rect x="7" y="7" width="2" height="2"/><rect x="4" y="10" width="2" height="2"/><rect x="10" y="10" width="2" height="2"/></svg>
+    </button>
+    <button class="btn panel share" id="share-btn" title="Share this view">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 4 5h3v6h2V5h3zM2 9h2v5h8V9h2v7H2z"/></svg><span>Share</span>
+    </button>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="zoom panel">
+    <button id="zin" aria-label="Zoom in" title="Zoom in (+)">+</button>
+    <button id="zout" aria-label="Zoom out" title="Zoom out (−)">−</button>
+    <button id="home" aria-label="Show the whole town" title="Whole town (H)">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 1 8h2v6h4v-4h2v4h4V8h2z"/></svg>
+    </button>
+  </div>
+</div>
+
+<footer class="bottombar">
+  <div class="season panel" role="radiogroup" aria-label="Season">
+    <button role="radio" data-season="summer" aria-checked="true">Summer</button>
+    <button role="radio" data-season="winter" aria-checked="false">Winter</button>
+    <button role="radio" data-season="night" aria-checked="false">Night</button>
+  </div>
+  <button class="btn panel about-mini" id="about-btn-2" aria-label="About this map">?</button>
+  <div class="readout panel" id="readout" aria-live="off">55.49043° N · 22.18627° E · z16.0</div>
+  <p class="attrib"><span class="long">Map data </span>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a><span class="long"> contributors · after <a href="https://isometricsf.com" target="_blank" rel="noopener">Isometric SF</a></span></p>
+</footer>
+
+<aside id="card" class="panel card sheet" hidden aria-live="polite" aria-labelledby="card-title">
+  <div class="grip" aria-hidden="true"></div>
+  <button class="icon-btn close" id="card-close" aria-label="Close">×</button>
+  <p class="eyebrow" id="card-kind"></p>
+  <h2 id="card-title"></h2>
+  <dl id="card-facts"></dl>
+  <div class="actions">
+    <button class="btn share" id="card-share" type="button">Share this place</button>
+    <a class="btn" id="card-osm" target="_blank" rel="noopener">OpenStreetMap ↗</a>
+  </div>
+</aside>
+
+<div id="share" class="modal" hidden>
+  <div class="panel dialog sheet" role="dialog" aria-modal="true" aria-labelledby="share-h">
+    <div class="grip" aria-hidden="true"></div>
+    <button class="icon-btn close" data-close aria-label="Close">×</button>
+    <h2 id="share-h">Share this view</h2>
+    <label for="share-note">Add a note <span class="muted">(optional, shows as a pin)</span></label>
+    <textarea id="share-note" maxlength="140" rows="2" placeholder="My grandparents lived here"></textarea>
+    <label for="share-link">Link</label>
+    <div class="row">
+      <input id="share-link" readonly>
+      <button class="btn share" id="copy-btn">Copy</button>
+    </div>
+    <button class="btn wide" id="send-btn" type="button" hidden>Send with another app…</button>
+  </div>
+</div>
+
+<div id="about" class="modal" hidden>
+  <div class="panel dialog sheet about" role="dialog" aria-modal="true" aria-labelledby="about-h">
+    <div class="grip" aria-hidden="true"></div>
+    <button class="icon-btn close" data-close aria-label="Close">×</button>
+    <h2 id="about-h">Isometric Šilalė</h2>
+    <p>A pixel-art map of Šilalė, a Samogitian town of about 5,000 people on the Lokysta river in western Lithuania.</p>
+    <p>Every house, road, field and pond comes from OpenStreetMap. Your browser paints each tile from that data: <b id="stat-b">3,362</b> buildings with roofs inferred from their footprints, both churches with their towers, and <b id="stat-t">thousands of</b> trees scattered through forests, yards and field edges. Building heights are estimates; OpenStreetMap rarely records them here.</p>
+    <p>The idea comes from Justin Chavez’s <a href="https://isometricsf.com" target="_blank" rel="noopener">Isometric SF</a>, which used AI models to paint San Francisco.</p>
+    <h3>On a phone</h3>
+    <ul class="keys touch">
+      <li><kbd>Drag</kbd> pan</li><li><kbd>Pinch</kbd> zoom</li>
+      <li><kbd>Double-tap</kbd> zoom in</li><li><kbd>2-finger tap</kbd> zoom out</li>
+      <li><kbd>Tap, hold, slide</kbd> one-hand zoom</li><li><kbd>Tap</kbd> building info</li>
+    </ul>
+    <h3>Keys</h3>
+    <ul class="keys">
+      <li><kbd>Drag</kbd> pan</li><li><kbd>Scroll</kbd> zoom</li>
+      <li><kbd>/</kbd> search</li><li><kbd>H</kbd> whole town</li>
+      <li><kbd>R</kbd> surprise me</li><li><kbd>S</kbd> next season</li>
+    </ul>
+  </div>
+</div>
+
+<div id="toast" role="status" hidden></div>
+<div id="hint" class="panel" hidden>
+  <p><b>Drag</b> to move · <b>pinch</b> or <b>double-tap</b> to zoom · <b>tap a building</b> for details</p>
+  <button class="btn" id="hint-ok" type="button">Got it</button>
+</div>
+<div id="loader"><div class="loader-box"><p>Painting Šilalė</p><div class="bar"><i id="loadbar"></i></div></div></div>
+
+<script src="js/shared.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
