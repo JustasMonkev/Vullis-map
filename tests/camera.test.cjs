@@ -273,7 +273,9 @@ test('optional preparation obeys a low-memory budget and town edges', () => {
   Object.assign(v.view, { x: 50, y: 50, s: 4 });
   v.schedule();
   assert.deepEqual(Array.from(v.plan().prepared.filter((key) => +key.split('/')[1] <= 2)).sort(), [
-    'night/0/0/0', 'summer/0/0/0', 'summer/1/0/0', 'summer/2/0/0', 'winter/0/0/0',
+    'night/0/0/0', 'night/1/0/0', 'night/2/0/0',
+    'summer/0/0/0', 'summer/1/0/0', 'summer/2/0/0',
+    'winter/0/0/0', 'winter/1/0/0', 'winter/2/0/0',
   ]);
 });
 
@@ -378,7 +380,7 @@ test('the opening move prepares the landing point as well as the initial view', 
   assert.equal(v.plan().prepared.includes('summer/0/0/0'), false, 'finished startup must not keep warming an abandoned opening target');
 });
 
-test('inactive seasons prepare only their visible level before optional zoom work', () => {
+test('inactive seasons prepare visible tiles first and nearby zoom levels within the shared budget', () => {
   const v = viewer();
   v.view.s = 4;
   v.schedule();
@@ -387,11 +389,17 @@ test('inactive seasons prepare only their visible level before optional zoom wor
   const optional = wanted.findIndex((key) => key === 'summer/2/0/0');
   for (const season of ['winter', 'night']) {
     const inactive = wanted.filter((key) => key.startsWith(season + '/'));
-    assert.equal(inactive.length, 4, 'inactive seasons must not preload a full detail pyramid');
-    assert.ok(inactive.every((key) => key.startsWith(season + '/0/')));
-    assert.ok(inactive.every((key) => wanted.indexOf(key) < optional), 'season changes take priority over optional zoom work');
-    assert.ok(active.every((key) => wanted.indexOf(key) < wanted.indexOf(inactive[0])), 'active visible tiles take priority over other seasons');
+    const visible = active.map((key) => season + key.slice(key.indexOf('/')));
+    assert.ok(visible.every((key) => wanted.indexOf(key) < optional), 'season changes take priority over optional zoom work');
+    assert.ok(active.every((key) => wanted.indexOf(key) < wanted.indexOf(visible[0])), 'active visible tiles take priority over other seasons');
+    for (let level = 0; level <= 2; level++) {
+      for (let y = -2; y <= 1; y++) for (let x = -2; x <= 1; x++) {
+        assert.ok(inactive.includes(`${season}/${level}/${x}/${y}`), `available capacity must prepare ${season} zoom level ${level}`);
+      }
+    }
+    assert.ok(wanted.indexOf('summer/0/1/1') < wanted.indexOf(`${season}/2/0/0`), 'the active zoom pyramid must precede inactive zoom prefetch');
   }
+  assert.ok(wanted.filter((key) => +key.split('/')[1] < 5).length <= v.cacheMax - 4, 'all seasonal zoom levels share the same budget');
 });
 
 test('all seasons share one live cache limit', () => {

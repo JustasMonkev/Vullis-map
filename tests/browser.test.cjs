@@ -89,6 +89,7 @@ async function observeSeasonCache(page) {
         saved: key => store.get(key),
         miss: key => store.state.get(key),
         has: key => cache.has(key),
+        zoom(scale) { zoomAt(W / 2, H / 2, scale / view.s); render(); return this.snapshot(); },
         evict(key) { cache.get(key).bmp.close(); cache.delete(key); dirty = true; },
       };
     `;
@@ -556,6 +557,13 @@ for (const mobile of [false, true]) {
         assert.ok(Object.values(images).every((previous) => previous !== image), 'a season switch must change actual map pixels');
         images[name] = image;
       }
+      for (const scale of [0.625, 2.5, 12, 4]) {
+        const previous = await page.evaluate(() => window.seasonCache.snapshot());
+        const zoomed = await page.evaluate((scale) => window.seasonCache.zoom(scale), scale);
+        assert.equal(zoomed.exact, true, `${name} zoom at scale ${scale} must already have exact visible tiles`);
+        assert.deepEqual(zoomed.paints.slice(previous.paints.length).filter((key) => zoomed.keys.includes(key)), [], 'zooming immediately after a season switch must not repaint visible tiles');
+      }
+      await page.waitForFunction(() => !window.seasonCache.snapshot().dirty);
     }
     await screenshot(page, mobile ? 'mobile-cached-seasons' : 'desktop-cached-seasons');
   });

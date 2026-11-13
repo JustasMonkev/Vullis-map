@@ -290,7 +290,7 @@
       return L < MAXL - 1 && (!bakedLevel(L) || baked.failed[k.split('/')[0] + '-L' + L]);
     };
     let liveWanted = [...planned].filter(liveKey).length;
-    // Warm only the visible level of other seasons, sharing the same detail budget.
+    // Other seasons' visible tiles take priority over optional zoom and pan work.
     const focus = openingFocus ? { ...v, ...openingFocus } : v;
     const otherL = levelFor(focus.s), otherR = tileRange(otherL, focus);
     if (!otherR.empty) for (const sz of SEASONS) {
@@ -302,7 +302,9 @@
       }
     }
     const zoom = zoomTiles(v).concat(openingFocus ? zoomTiles(openingFocus) : []);
-    for (const key of zoom) {
+    const inactiveZoom = zoomTiles(focus).flatMap((key) => SEASONS.filter((sz) => sz !== season)
+      .map((sz) => sz + key.slice(key.indexOf('/'))));
+    for (const key of zoom.concat(inactiveZoom)) {
       if (planned.has(key)) continue;
       if (liveWanted >= CACHE_MAX - 4) break;
       planned.add(key); out.push(key); liveWanted++;

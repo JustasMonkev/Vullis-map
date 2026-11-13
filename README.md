@@ -88,7 +88,7 @@ order: the overview first, then half-resolution parents of empty on-screen tiles
 quickly), then on-screen tiles from the centre outwards, nearby detail zoom levels, and a ring
 just off screen. Startup prepares the three detail levels around the starting view and opening
 glide before revealing the map, with progress and a 15-second preparation limit. The other
-seasons' visible tiles are prepared too, and switching seasons retains cached artwork.
+seasons' visible tiles and nearby detail levels are prepared too, and switching seasons retains cached artwork.
 Zoom and season prefetch share the live-tile memory budget with pan prefetch; visible tiles take priority. During a
 glide it plans for where the camera is going. Painted tiles are also saved to IndexedDB, so
 repeat visits load almost instantly. Bump `VERSION` in `js/shared.js` whenever the renderer
