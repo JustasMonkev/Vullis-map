@@ -172,7 +172,9 @@ def enrich_existing(existing, generated, area_sources):
                 raise ValueError(f'No exact source match for {section}: {key(item)}')
             if section == 'buildings' and item['r'] != fresh['r']:
                 raise ValueError('Building footprint changed during enrichment')
-            result[section].append({**item, **{field: fresh[field] for field in fields[section] if field in fresh}})
+            retained = {field: value for field, value in item.items()
+                        if field not in fields[section] or field in fresh}
+            result[section].append({**retained, **{field: fresh[field] for field in fields[section] if field in fresh}})
     unchanged = {json.dumps(item, sort_keys=True) for item in generated['areas']}
     result['areas'] = []
     for item in existing['areas']:

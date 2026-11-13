@@ -107,6 +107,18 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual(sorted(r.get('s', '') for r in data['roads']), ['', 'asphalt', 'paving_stones'])
         self.assertEqual([r['w'] for r in data['roads'] if 'w' in r], [4])
         self.assertEqual([r['lanes'] for r in data['roads'] if 'lanes' in r], [3])
+        # Rounded local-metre endpoints of source ways 212760644, 294504775,
+        # and 403173579. Keep each tag bundle attached to its actual geometry.
+        expected = [
+            ((-317.3, 227.5, 87.2, 160.7), ('path', 'paving_stones', None, None)),
+            ((125.8, -100.5, 207.1, -136.9), ('secondary', 'asphalt', None, 3)),
+            ((-48.8, 499.1, -206.4, 425.7), ('residential', None, 4, None)),
+        ]
+        roads = {tuple(r['p'][:2] + r['p'][-2:]): r for r in data['roads']}
+        self.assertEqual(set(roads), {endpoints for endpoints, _ in expected})
+        for endpoints, attributes in expected:
+            road = roads[endpoints]
+            self.assertEqual(tuple(road.get(key) for key in ('c', 's', 'w', 'lanes')), attributes)
         self.assertEqual(data['waterways'][0]['covered'], 1)
         self.assertEqual(data['buildings'][0]['id'], '291605405')
         self.assertEqual(data['buildings'][0]['levels'], 1)

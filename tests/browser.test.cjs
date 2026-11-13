@@ -129,10 +129,10 @@ test('source canopy trees respect real canvas occupancy and leave covered culver
   assert.ok(result.trees.length > 100, 'canopy must produce enough trees to exercise exclusions');
   for (const [e, n] of result.trees) {
     assert.ok(e < 0, 'grass-class pixels must not grow inferred canopy');
-    assert.ok(Math.abs(n + 40) >= 4, 'the measured road carriageway stays clear');
+    assert.ok(!(e > -88 && e < 88 && Math.abs(n + 40) < 6), 'the full 12 m measured road carriageway stays clear');
     assert.ok(!(e > -60 && e < -30 && n > -10 && n < 20), 'building interior stays clear');
     assert.ok(!(e > -80 && e < -35 && n > 35 && n < 65), 'open water stays clear');
-    assert.ok(!(Math.abs(e + 15) < 2 && n > -70 && n < 70), 'open stream stays clear');
+    assert.ok(!(Math.abs(e + 15) < 4 && n > -68 && n < 68), 'the full 8 m measured open stream stays clear');
   }
   assert.ok(result.trees.some(([e, n]) => e > -79 && e < -71 && n > -78 && n < -55), 'covered stream must not cut a visible clearing through canopy');
   await page.evaluate((image) => { const img = document.createElement('img'); img.src = image; document.body.append(img); return img.decode(); }, result.image);
@@ -182,6 +182,22 @@ test('real pixels distinguish bridge decks, mapped road surfaces and underground
 
 test('the published church tower height survives loading and appears with its source in every season', { timeout: 60000 }, async (t) => {
   const { page, ready } = await openMap(t, { reducedMotion: 'reduce' });
+  await page.route('**/js/app.js', async (route) => {
+    const source = await readFile(resolve(root, 'js/app.js'), 'utf8');
+    const seam = '  boot().catch((err) => {';
+    assert.ok(source.includes(seam), 'test seam must match the app boot call');
+    const settled = `
+      window.isMapSettled = () => {
+        if (!isoBounds || dirty || anim) return false;
+        const L = levelFor(view.s), R = tileRange(L);
+        for (let ty = R.ty0; ty <= R.ty1; ty++) for (let tx = R.tx0; tx <= R.tx1; tx++) {
+          if (!cache.has(tileKey(L, tx, ty))) return false;
+        }
+        return true;
+      };
+    `;
+    await route.fulfill({ contentType: 'text/javascript', body: source.replace(seam, settled + seam) });
+  });
   await ready();
   const landmark = await page.evaluate(async () => {
     const data = await window.SIL.loadMapData(new URL('data/silale.json', location.href).href);
@@ -192,6 +208,34 @@ test('the published church tower height survives loading and appears with its so
   assert.equal(landmark.top, 60);
   assert.equal(landmark.towerTip, 60, 'the cross must fit inside the published total tower height');
   assert.equal(landmark.source.quality, 'approximate');
+  const towerPixels = await runPainter(page, `
+    D = {
+      meta: { bounds: [-30, -20, 30, 20], lat0: 0, lon0: 0, mLat: 1, mLon: 1 },
+      landcover: { crs: 'EPSG:4326', width: 1, height: 1, transform: [-30, 60, 0, 20, 0, -40], nodata: 0, encoding: 'rle-count-value', data: [1, 30] },
+      areas: [], buildings: [], roads: [], waterways: [], barriers: [], trees: [], treeRows: []
+    };
+    // A simple, isolated footprint keeps ground, nave and shadows below this
+    // fixed upper-tower window. At L0 the 60 m tip is near pixel (40, 52);
+    // a default 50.6 m church or a 20 m church cannot reach rows 50..60.
+    const church = { r: [-20, -8, 20, -8, 20, 8, -20, 8], h: 12, roof: 'church', m: 'brick' };
+    const result = {};
+    for (const season of ['summer', 'winter', 'night']) {
+      const counts = [];
+      for (const buildings of [[], [church], [{ ...church, height: 20 }], [{ ...church, height: 60 }]]) {
+        D.buildings = buildings; prepare(); paintTile(0, 0, -1, season);
+        const pixels = g.getImageData(35, 50, 11, 11).data;
+        let count = 0;
+        for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 128) count++;
+        counts.push(count);
+      }
+      result[season] = counts;
+    }
+    return result;
+  `);
+  for (const [season, [empty, inferred, short, measured]] of Object.entries(towerPixels)) {
+    assert.deepEqual([empty, inferred, short], [0, 0, 0], `${season}: upper tower window is clear without a 60 m tower`);
+    assert.ok(measured >= 5, `${season}: the painter draws the measured 60 m tower in its elevated window`);
+  }
   await page.locator('#q').fill(landmark.name);
   await page.locator('#q').press('Enter');
   await page.locator('#card').waitFor({ state: 'visible' });
@@ -200,13 +244,16 @@ test('the published church tower height survives loading and appears with its so
   assert.equal(facts['Height basis'], landmark.source.label);
   assert.equal(await page.locator('#card-height-source').getAttribute('href'), 'https://silale.lt/en/tourism/');
   assert.equal(await page.locator('#card-height-source').isVisible(), true);
-  await painted(page); await screenshot(page, 'source-church-summer');
+  await painted(page);
+  await page.waitForFunction(() => window.isMapSettled());
+  await screenshot(page, 'source-church-summer');
   for (const season of ['winter', 'night']) {
     const previous = await canvasImage(page);
     await page.getByRole('radio', { name: season[0].toUpperCase() + season.slice(1) }).click();
     await page.waitForFunction((previous) => document.querySelector('#map').toDataURL() !== previous, previous);
     await painted(page);
     assert.equal(await page.locator('body').getAttribute('data-season'), season);
+    await page.waitForFunction(() => window.isMapSettled());
     await screenshot(page, 'source-church-' + season);
   }
   await page.locator('#card-close').click();
@@ -214,7 +261,9 @@ test('the published church tower height survives loading and appears with its so
   await page.locator('#q').fill('55.490626, 22.173438');
   await page.locator('#q').press('Enter');
   await page.waitForFunction(() => document.querySelector('#readout').textContent.startsWith('55.49063'));
-  await painted(page); await screenshot(page, 'source-bridge');
+  await painted(page);
+  await page.waitForFunction(() => window.isMapSettled());
+  await screenshot(page, 'source-bridge');
 });
 
 // Execute the actual painter in Chromium. Only the boot and unrelated UI are
@@ -463,6 +512,7 @@ for (const mobile of [false, true]) {
     assert.ok(url.endsWith(encodeURIComponent('Zoom check & Šilalė')));
     await page.goto(url);
     await page.locator('#loader').waitFor({ state: 'hidden', timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector('#note-text').textContent === 'Zoom check & Šilalė');
     assert.equal(await page.locator('#note-text').textContent(), 'Zoom check & Šilalė');
     assert.match(await page.locator('#readout').textContent(), /^55\.49408.*22\.18031/);
     await painted(page); await screenshot(page, mobile ? 'mobile-search-share' : 'desktop-search-share');
