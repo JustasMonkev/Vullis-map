@@ -32,6 +32,25 @@ python3 -m http.server 8000
 
 To publish it, push to GitHub Pages or any static host.
 
+## Tests
+
+Development checks use Node.js 24 and Playwright; the site itself still needs no build step.
+
+```sh
+npm ci
+npx playwright install chromium
+npm test
+```
+
+Camera and geometry tests also run without installed packages:
+
+```sh
+node --test tests/atlas.test.cjs tests/camera.test.cjs tests/realism.test.cjs
+```
+
+The browser suite uses actual workers and canvas rendering on desktop and mobile-sized
+viewports. GitHub Actions runs it and rebuilds the overview images for every season.
+
 ## Layout
 
 | Path | What it does |
@@ -82,7 +101,10 @@ python3 tools/build_data.py osm_cache/              # convert an existing cache
 ```
 
 OpenStreetMap records almost no building heights for Šilalė, so heights and roof shapes are
-estimated from each footprint's size, shape, tags and distance from the centre.
+estimated from each footprint's size, shape, tags and distance from the centre. Irregular
+footprints keep their actual outline instead of being expanded into rectangular houses.
+Inferred trees stay within their source land-cover polygons and outside polygon holes;
+their positions, species and density are illustrative. Church towers remain stylized.
 
 ## Credits
 

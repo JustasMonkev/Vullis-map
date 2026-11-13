@@ -123,12 +123,17 @@ function occupancy() {
 
 function makeTrees() {
   const E = [], N = [], K = [], V = [], F = [];
+  const positions = new Set();
   const occ = occupancy();
   const [e0, n0, e1, n1] = bounds;
   const add = (e, n, kind, forest) => {
     if (e < e0 + 1 || e > e1 - 1 || n < n0 + 1 || n > n1 - 1) return;
+    const key = Math.fround(e) + ':' + Math.fround(n);
+    if (positions.has(key)) return;
+    positions.add(key);
     E.push(e); N.push(n); K.push(kind); V.push(hash32((e * 10) | 0 ^ ((n * 10) | 0) * 31) % 9); F.push(forest);
   };
+  for (const [e, n] of D.trees) add(e, n, 0, 0);
   // Scanline fill of an area on a jittered grid.
   const scatter = (a, sp, prob, kinds, forest, salt) => {
     const [ax0, ay0, ax1, ay1] = a.bb;
@@ -149,6 +154,7 @@ function makeTrees() {
           const e = gx * sp + (rnd2(gx, gy, salt + 1) - 0.5) * sp * 0.9;
           const n = y + (rnd2(gx, gy, salt + 2) - 0.5) * sp * 0.9;
           if (occ(e, n)) continue;
+          if (!pointInRing(e, n, a.r[0]) || a.r.some((r, i) => i > 0 && pointInRing(e, n, r))) continue;
           const t = rnd2(gx, gy, salt + 3);
           let kind = 0;
           for (let q = 0, acc = 0; q < kinds.length; q++) { acc += kinds[q]; if (t < acc) { kind = q; break; } }
@@ -187,7 +193,6 @@ function makeTrees() {
       carry = (carry - L) % 7; if (carry < 0) carry += 7;
     }
   }
-  for (const [e, n] of D.trees) add(e, n, 0, 0);
   const n = E.length;
   TR = { n, e: Float32Array.from(E), n_: Float32Array.from(N), k: Uint8Array.from(K), v: Uint8Array.from(V), f: Uint8Array.from(F) };
 }

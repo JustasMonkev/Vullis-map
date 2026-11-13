@@ -25,6 +25,7 @@
   const workers = [];
   const cache = new Map();         // key -> {bmp, used}
   const pending = new Map();       // key -> worker index
+  const failedTiles = new Map();
   const CACHE_MAX = Math.round(110 + 150 * Math.min(1, (navigator.deviceMemory || 4) / 8));
 
   /* Painted tiles are kept in IndexedDB, so a second visit (or panning back after the
@@ -87,9 +88,18 @@
       for (let i = 0; i < NW; i++) {
         const w = new Worker('js/worker.js');
         w.inflight = 0;
+        const fail = (error) => {
+          console.error(error);
+          w.failed = true; w.inflight = 0;
+          w.terminate();
+          for (const [key, owner] of pending) if (owner === w) pending.delete(key);
+          reject(error);
+          pump();
+        };
         w.onmessage = (ev) => {
           const m = ev.data;
           if (m.type === 'ready') {
+            w.ready = true;
             workersReady++;
             if (i === 0) $('stat-t').textContent = m.trees.toLocaleString('en-US');
             if (workersReady === NW) resolve();
@@ -97,19 +107,20 @@
             w.inflight--;
             pending.delete(m.key);
             if (m.bitmap) {
+              failedTiles.delete(m.key);
               if (m.key.startsWith(season + '/')) cache.set(m.key, { bmp: m.bitmap, used: frameNo });
               else m.bitmap.close();                    // finished after a season switch
-            }
+            } else failedTiles.set(m.key, (failedTiles.get(m.key) || 0) + 1);
             dirty = true;
             pump();
           } else if (m.type === 'blob') {
             store.put(m.key, m.blob);
           } else if (m.type === 'error') {
-            console.error('[worker]', m.message);
-            if (workersReady < NW) reject(new Error(m.message));
+            if (!w.ready) fail(new Error(m.message));
+            else console.error('[worker]', m.message);
           }
         };
-        w.onerror = (e) => { console.error(e); reject(e); };
+        w.onerror = fail;
         w.postMessage({ type: 'init', dataUrl });
         workers.push(w);
       }
@@ -153,7 +164,7 @@
   let lookups = 0;
   function pump() {
     for (const key of wanted) {
-      if (cache.has(key) || pending.has(key)) continue;
+      if (cache.has(key) || pending.has(key) || failedTiles.get(key) >= 2) continue;
       const kl = +key.split('/')[1];
       if (bakedLevel(kl) && !baked.failed[season + '-L' + kl]) { loadBaked(season, kl); continue; }
       const st = store.state.get(key);
@@ -174,7 +185,7 @@
         continue;
       }
       let best = null;
-      for (const w of workers) if (w.inflight < 2 && (!best || w.inflight < best.inflight)) best = w;
+      for (const w of workers) if (!w.failed && w.inflight < 2 && (!best || w.inflight < best.inflight)) best = w;
       if (!best) return;
       const [theme, L, tx, ty] = key.split('/');     // the key names its own season
       best.inflight++;
@@ -281,6 +292,7 @@
     const dx0 = Math.round(((X - view.x) * view.s + W / 2) * DPR), dy0 = Math.round(((Y - view.y) * view.s + H / 2) * DPR);
     const dx1 = Math.round(((X + span - view.x) * view.s + W / 2) * DPR), dy1 = Math.round(((Y + span - view.y) * view.s + H / 2) * DPR);
     if (dx1 <= dx0 || dy1 <= dy0 || k <= 0) return;
+    ctx.clearRect(dx0, dy0, dx1 - dx0, dy1 - dy0);
     ctx.drawImage(bmp, sx, sy, sw, sh, dx0, dy0, dx1 - dx0, dy1 - dy0);
   }
 
@@ -475,10 +487,9 @@
     view.x = Math.max(isoBounds[0] - m, Math.min(isoBounds[2] + m, view.x));
     view.y = Math.max(isoBounds[1] - m, Math.min(isoBounds[3] + m, view.y));
   }
-  // Direct zoom (wheel, buttons, keys, pinch). It cancels any glide or momentum, which
-  // would otherwise overwrite the new zoom on the next frame.
   let userMoved = false;
   function zoomAt(sx, sy, f) {
+    cancelGesture();
     anim = null; inertia = null; userMoved = true; cancelCardSoon();
     const [X, Y] = toIso(sx, sy);
     view.s *= f; clampView();
@@ -494,6 +505,7 @@
 
   let anim = null;
   function flyTo(target, ms) {
+    anim = null; inertia = null;
     target = Object.assign({}, target);
     if (reduceMotion) { Object.assign(view, target); clampView(); dirty = true; scheduleHash(); return; }
     const from = { x: view.x, y: view.y, s: view.s };
@@ -620,6 +632,7 @@
     }
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
     if (!gesture) return;
+    anim = null; inertia = null;
     if (gesture.type === 'pinch' && pointers.size >= 2) {
       const [cx, cy] = centroid(), d = spread();
       view.s = Math.max(S_MIN, Math.min(S_MAX, gesture.s0 * d / gesture.d0));
@@ -678,13 +691,23 @@
       scheduleHash();
     }
   };
+  function cancelGesture() {
+    if (!gesture && !inertia) return;
+    const active = [...pointers.keys()];
+    pointers.clear();
+    gesture = null; lastTap = null; anim = null; inertia = null;
+    canvas.classList.remove('dragging');
+    for (const id of active) if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+    if (META) scheduleHash();
+  }
   canvas.addEventListener('pointerup', endPointer);
-  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('pointercancel', (e) => { if (pointers.has(e.pointerId)) cancelGesture(); });
+  canvas.addEventListener('lostpointercapture', (e) => { if (pointers.has(e.pointerId)) cancelGesture(); });
+  window.addEventListener('blur', cancelGesture);
   canvas.addEventListener('pointerleave', () => { if (hover >= 0 && !gesture) { hover = -1; dirty = true; } });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    anim = null; inertia = null;
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomAt(e.clientX, e.clientY, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0022)));
   }, { passive: false });
@@ -756,6 +779,7 @@
   function setSeason(sz) {
     if (!sz || sz === season) return;
     season = sz;
+    failedTiles.clear();
     wanted = []; wantedSet = new Set();           // nothing from the old season gets requested again
     document.body.dataset.season = sz;
     document.querySelectorAll('.season button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.season === sz)));

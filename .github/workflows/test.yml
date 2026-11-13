@@ -1,0 +1,33 @@
+name: Map regression tests
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: python3 -m pip install Pillow
+      - run: node --test tests/atlas.test.cjs
+      - run: npm run bake
+      - run: npm test
+        env:
+          TEST_ARTIFACTS: test-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: map-evidence
+          path: |
+            tiles/
+            test-results/

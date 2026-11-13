@@ -1,0 +1,11 @@
+{
+  "name": "isometric-silale",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "bake": "node tools/bake_overview.js"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
