@@ -10,6 +10,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('crypto');
 const { execFileSync } = require('child_process');
 const { chromium } = require('playwright');
 
@@ -86,6 +87,11 @@ im.save(sys.argv[2], 'WEBP', lossless=True, method=6, exact=False)
   }
   delete atlas.images;
   atlas.files = files;
+  const sourceHash = createHash('sha256');
+  for (const name of ['js/shared.js', 'js/worker.js', 'data/silale.json', 'data/landcover.json', 'data/landmarks.json']) {
+    sourceHash.update(name).update('\0').update(fs.readFileSync(path.join(ROOT, name))).update('\0');
+  }
+  atlas.sourceHash = sourceHash.digest('hex');
   fs.writeFileSync(path.join(OUT, 'atlas.json'), JSON.stringify(atlas, null, 1) + '\n');
   await browser.close();
   server.close();

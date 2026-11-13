@@ -22,6 +22,9 @@ function trees(areas, mapped = []) {
     D = { treeRows: [], trees: inputTrees };
     bounds = [-200, -200, 200, 200];
     AREAS = inputAreas.map((a) => ({ ...a, bb: bboxOf(a.r[0]) }));
+    CANOPY = prepareCanopy({ crs: 'EPSG:4326', width: 160, height: 160,
+      transform: [-80, 1, 0, 80, 0, -1], encoding: 'rle-count-value', data: [25600, 10] },
+      { lon0: 0, lat0: 0, mLon: 1, mLat: 1 });
     occupancy = () => () => 0;
     makeTrees();
     Array.from(TR.e, (e, i) => ({ e, n: TR.n_[i], forest: TR.f[i] }));

@@ -59,7 +59,7 @@
   </div>
   <button class="btn panel about-mini" id="about-btn-2" aria-label="About this map">?</button>
   <div class="readout panel" id="readout" aria-live="off">55.49043° N · 22.18627° E · z16.0</div>
-  <p class="attrib"><span class="long">Map data </span>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a><span class="long"> contributors · after <a href="https://isometricsf.com" target="_blank" rel="noopener">Isometric SF</a></span></p>
+  <p class="attrib"><span class="long">Map data </span>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · <a href="https://esa-worldcover.org/en" target="_blank" rel="noopener">ESA WorldCover</a><span class="long"> · after <a href="https://isometricsf.com" target="_blank" rel="noopener">Isometric SF</a></span></p>
 </footer>
 
 <aside id="card" class="panel card sheet" hidden aria-live="polite" aria-labelledby="card-title">
@@ -71,6 +71,7 @@
   <div class="actions">
     <button class="btn share" id="card-share" type="button">Share this place</button>
     <a class="btn" id="card-osm" target="_blank" rel="noopener">OpenStreetMap ↗</a>
+    <a class="btn" id="card-height-source" target="_blank" rel="noopener" hidden>Height source ↗</a>
   </div>
 </aside>
 
@@ -96,7 +97,10 @@
     <button class="icon-btn close" data-close aria-label="Close">×</button>
     <h2 id="about-h">Isometric Šilalė</h2>
     <p>A pixel-art map of Šilalė, a Samogitian town of about 5,000 people on the Lokysta river in western Lithuania.</p>
-    <p>Every house, road, field and pond comes from OpenStreetMap. Your browser paints each tile from that data: <b id="stat-b">3,362</b> buildings with roofs inferred from their footprints, both churches with their towers, and <b id="stat-t">thousands of</b> trees scattered through forests, yards and field edges. Building heights are estimates; OpenStreetMap rarely records them here.</p>
+    <p>Building footprints, roads, rivers and ponds come from OpenStreetMap: <b id="stat-b">3,362</b> buildings and <b id="stat-t">thousands of</b> illustrative trees. Mapped road surfaces, bridges and underground stream sections shape the scene.</p>
+    <p>Tree-covered ground follows the <a href="https://esa-worldcover.org/en" target="_blank" rel="noopener">ESA WorldCover 2021</a> satellite land-cover map. Its approximately 10 m cells indicate canopy areas, not individual tree positions. OpenStreetMap tree points and rows are retained.</p>
+    <p>Land cover © ESA WorldCover project 2021, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>. Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium; cropped for this map.</p>
+    <p>Most heights, roofs and architectural details are estimates. The Catholic church's approximately 60 m tower height comes from the <a href="https://silale.lt/en/tourism/" target="_blank" rel="noopener">municipal tourism description</a>; its component proportions remain schematic. Building cards distinguish published heights from estimates.</p>
     <p>The idea comes from Justin Chavez’s <a href="https://isometricsf.com" target="_blank" rel="noopener">Isometric SF</a>, which used AI models to paint San Francisco.</p>
     <h3>On a phone</h3>
     <ul class="keys touch">

@@ -1,5 +1,5 @@
 {
- "version": "r4",
+ "version": "r5",
  "tile": 256,
  "levels": {
   "3": {
@@ -40,5 +40,6 @@
   "summer-L6": "summer-L6.webp",
   "winter-L6": "winter-L6.webp",
   "night-L6": "night-L6.webp"
- }
+ },
+ "sourceHash": "2554ea64a3e67cd075729e016c0860d2759519c3d2f2dee65b05764f6336409e"
 }

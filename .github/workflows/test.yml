@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -19,11 +21,20 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: python3 -m pip install Pillow
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
       - run: node --test tests/atlas.test.cjs
+        id: shipped_atlas
+        continue-on-error: true
       - run: npm run bake
       - run: npm test
         env:
           TEST_ARTIFACTS: test-results
+      - run: npm run benchmark -- --baseline 6c17babd7e5a58adfca97c6d94c4ce01b80b6463
+        env:
+          TEST_ARTIFACTS: test-results
+      - name: Require current shipped overview images
+        if: steps.shipped_atlas.outcome != 'success'
+        run: exit 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

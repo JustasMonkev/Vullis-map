@@ -213,6 +213,30 @@
 
   /* Turn a raw building record into a render-ready one.
      kind: 'flat' (extruded footprint) | 'gable' | 'hip' | 'church' */
+  function applyProfiles(data, landmarks) {
+    if (!Array.isArray(landmarks.profiles)) throw new Error('Invalid landmark profiles');
+    const buildings = new Map(data.buildings.map((b) => [b.id, b]));
+    const seen = new Set();
+    for (const p of landmarks.profiles) {
+      if (!buildings.has(p.id) || seen.has(p.id)) throw new Error('Unknown or duplicate landmark ID: ' + p.id);
+      if (!Number.isFinite(p.height) || p.height <= 0 || !p.heightSource || p.heightSource.quality !== 'approximate' || typeof p.heightSource.url !== 'string' || !/^https:\/\//.test(p.heightSource.url) || !URL.canParse(p.heightSource.url) || typeof p.heightSource.label !== 'string' || !p.heightSource.label.length) throw new Error('Invalid landmark height source: ' + p.id);
+      seen.add(p.id);
+    }
+    for (const p of landmarks.profiles) Object.assign(buildings.get(p.id), { height: p.height, heightSource: p.heightSource });
+    return data;
+  }
+
+  async function loadMapData(dataUrl) {
+    const urls = [dataUrl, new URL('landmarks.json', dataUrl).href, new URL('landcover.json', dataUrl).href];
+    const [data, landmarks, landcover] = await Promise.all(urls.map(async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Map source ' + url + ': HTTP ' + response.status);
+      return response.json();
+    }));
+    data.landcover = landcover;
+    return applyProfiles(data, landmarks);
+  }
+
   function prepBuilding(b, i) {
     const r = b.r;
     const area = Math.abs(ringArea(r));
@@ -225,23 +249,35 @@
       kind = 'flat';
       box = null;
     }
-    let top = b.h, rise = 0;
+    const height = Number.isFinite(b.height) && b.height > 0 ? b.height : null;
+    const roofHeight = Number.isFinite(b.rh) && b.rh >= 0 ? b.rh : null;
+    const heightSource = height === null ? { quality: 'inferred', label: 'Estimated from footprint and building type' } : b.heightSource || { quality: 'osm', label: 'OSM height; geometry is schematic' };
+    if (height !== null && !b.heightSource && /^r?\d+$/.test(b.id)) heightSource.url = 'https://www.openstreetmap.org/' + (b.id[0] === 'r' ? 'relation/' + b.id.slice(1) : 'way/' + b.id);
+    let h = height === null ? b.h : height, top = h, rise = 0;
     if (kind === 'gable' || kind === 'hip') {
-      rise = Math.min(5.5, box.w * 0.5 * (m === 'shed' ? 0.5 : 0.85));
-      top = b.h + rise;
+      rise = roofHeight === null ? Math.min(5.5, box.w * 0.5 * (m === 'shed' ? 0.5 : 0.85)) : roofHeight;
+      if (height !== null) {
+        rise = Math.min(rise, roofHeight === null ? height / 2 : height);
+        h = height - rise;
+      }
+      top = h + rise;
     }
     let tower = null;
     if (kind === 'church') {
       const big = area > 300;
       const eave = big ? 12 : 7;
-      rise = Math.min(8, box.w * 0.5 * 1.1);
+      rise = roofHeight === null ? Math.min(8, box.w * 0.5 * 1.1) : roofHeight;
       // Tower at the end of the long axis that faces south (towards the camera).
       const sgn = box.u[1] > 0 ? -1 : 1;
       const tw = Math.min(box.w * (big ? 0.62 : 0.7), big ? 8 : 4.5);
       const tc = [box.c[0] + box.u[0] * sgn * (box.l / 2 - tw / 2), box.c[1] + box.u[1] * sgn * (box.l / 2 - tw / 2)];
-      tower = { c: tc, w: tw, h: big ? 31 : 15, spire: big ? 17 : 9 };
-      top = tower.h + tower.spire + 2;
-      b = Object.assign({}, b, { h: eave });
+      const shaft = big ? 31 : 15, spire = big ? 17 : 9;
+      const cross = height === null ? 2.6 : Math.min(2.6, height / 10);
+      const scale = height === null ? 1 : (height - cross) / (shaft + spire);
+      tower = { c: tc, w: tw, h: shaft * scale, spire: spire * scale, cross };
+      top = height === null ? shaft + spire + cross : height;
+      h = Math.min(eave, tower.h);
+      rise = Math.min(rise, top - h);
     }
     // depth: larger = farther from camera (drawn first)
     let dmin = Infinity, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
@@ -261,7 +297,7 @@
     y0 -= top * ISO.H + 2;
     const depth = ((c[0] + c[1]) + dmin) / 2;
     return {
-      i, r, c, area, kind, box, h: b.h, rise, top, tower, m,
+      i, r, c, area, kind, box, h, rise, top, tower, m, heightSource,
       wi: hash32(seed + 1), ri: hash32(seed + 2),
       seed, depth, bbox: [x0 - 1, y0, x1 + 1, y1 + 1],
       chimney: (m === 'house' && kind !== 'flat' && (seed % 10) < 6),
@@ -318,11 +354,11 @@
   }
 
   // Bump whenever the renderer or the data changes: browsers drop tiles saved by older versions.
-  const VERSION = 'r4';
+  const VERSION = 'r5';
 
   const api = {
     VERSION, ISO, isoBoundsOf, levelRange, boxCorners, isoX, isoY, hash32, rnd, rnd2, hexToRgb, rgbToHex, mix, shade, SHADES, THEMES, collectPalette,
-    ringArea, ringCentroid, pointInRing, obb, prepBuilding, Grid, makeSeen,
+    ringArea, ringCentroid, pointInRing, obb, applyProfiles, loadMapData, prepBuilding, Grid, makeSeen,
     worldToLatLon, latLonToWorld, isoToWorld,
   };
   root.SIL = api;

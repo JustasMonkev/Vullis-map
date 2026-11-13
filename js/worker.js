@@ -13,6 +13,7 @@ let AREAS = [], ROADS = [], WATERWAYS = [], BARRIERS = [];
 let objGrid = null, seen = null;
 let TR = null;           // trees: {e, n, kind, v, forest}
 let LAMPS = [];
+let CANOPY = null;
 let bounds;
 
 // ------------------------------------------------------------ init
@@ -22,8 +23,7 @@ self.onmessage = async (ev) => {
   const msg = ev.data;
   if (msg.type === 'init') {
     try {
-      const res = await fetch(msg.dataUrl);
-      D = await res.json();
+      D = await self.SIL.loadMapData(msg.dataUrl);
       const t0 = performance.now();
       prepare();
       readyResolve();
@@ -68,13 +68,55 @@ const MINOR = new Set(['unclassified', 'residential', 'living_street', 'pedestri
 const PATHS = new Set(['footway', 'path', 'cycleway', 'steps', 'bridleway']);
 const roadRank = (c) => (PATHS.has(c) ? 0 : c === 'track' ? 1 : c === 'service' ? 2 : MINOR.has(c) ? 3 : 4);
 const WATER_W = { river: 12, stream: 3, canal: 6, ditch: 1.6, drain: 1.6 };
+const DIRT = new Set(['unpaved', 'gravel', 'dirt', 'ground', 'compacted', 'fine_gravel', 'sand', 'grass']);
+const PAVERS = new Set(['paving_stones', 'cobblestone', 'sett', 'unhewn_cobblestone']);
+
+function roadWidth(r) {
+  if (Number.isFinite(r.w) && r.w > 0) return { w: r.w, widthSource: 'measured' };
+  if (!PATHS.has(r.c) && Number.isInteger(r.lanes) && r.lanes > 0) return { w: r.lanes * 3, widthSource: 'lanes' };
+  return { w: ROAD_W[r.c] || 4, widthSource: 'class' };
+}
+
+function prepareCanopy(lc, meta) {
+  if (!lc || lc.crs !== 'EPSG:4326' || lc.encoding !== 'rle-count-value' ||
+      !Number.isInteger(lc.width) || !Number.isInteger(lc.height) || lc.width < 1 || lc.height < 1 ||
+      !Number.isSafeInteger(lc.width * lc.height) || lc.width * lc.height > 2000000 ||
+      !Array.isArray(lc.transform) || lc.transform.length !== 6 || !lc.transform.every(Number.isFinite) ||
+      lc.transform[1] <= 0 || lc.transform[5] >= 0 || lc.transform[2] !== 0 || lc.transform[4] !== 0 ||
+      !Array.isArray(lc.data) || lc.data.length % 2) throw new Error('Invalid land-cover grid');
+  const pixels = new Uint8Array(lc.width * lc.height);
+  let offset = 0;
+  for (let i = 0; i < lc.data.length; i += 2) {
+    const count = lc.data[i], value = lc.data[i + 1];
+    if (!Number.isInteger(count) || count < 1 || !Number.isInteger(value) || value < 0 || value > 255 || offset + count > pixels.length) throw new Error('Invalid land-cover run');
+    pixels.fill(value, offset, offset + count);
+    offset += count;
+  }
+  if (offset !== pixels.length) throw new Error('Incomplete land-cover grid');
+  const [west, dx, , north, , dy] = lc.transform;
+  const at = (e, n) => {
+    const x = Math.floor((meta.lon0 + e / meta.mLon - west) / dx);
+    const y = Math.floor((meta.lat0 + n / meta.mLat - north) / dy);
+    return x >= 0 && y >= 0 && x < lc.width && y < lc.height && pixels[y * lc.width + x] === 10;
+  };
+  const runs = [];
+  for (let y = 0; y < lc.height; y++) for (let x = 0; x < lc.width;) {
+    if (pixels[y * lc.width + x] !== 10) { x++; continue; }
+    const start = x;
+    while (x < lc.width && pixels[y * lc.width + x] === 10) x++;
+    runs.push([(west + start * dx - meta.lon0) * meta.mLon, (north + (y + 1) * dy - meta.lat0) * meta.mLat,
+      (west + x * dx - meta.lon0) * meta.mLon, (north + y * dy - meta.lat0) * meta.mLat]);
+  }
+  return { at, runs };
+}
 
 function prepare() {
   bounds = D.meta.bounds;
+  CANOPY = prepareCanopy(D.landcover, D.meta);
   AREAS = D.areas.map((a) => ({ k: a.k, r: a.r, bb: bboxOf(a.r[0]) }));
-  ROADS = D.roads.map((r) => ({ c: r.c, p: r.p, u: r.u, br: r.br, w: ROAD_W[r.c] || 4, bb: bboxOf(r.p), rank: roadRank(r.c) }))
-    .sort((a, b) => a.rank - b.rank);
-  WATERWAYS = D.waterways.map((w) => ({ c: w.c, p: w.p, w: WATER_W[w.c] || 2, bb: bboxOf(w.p) }));
+  ROADS = D.roads.map((r) => ({ c: r.c, p: r.p, s: r.s, lanes: r.lanes, u: r.u, br: r.br, ...roadWidth(r), bb: bboxOf(r.p), rank: roadRank(r.c) }))
+    .sort((a, b) => Number(!!a.br) - Number(!!b.br) || a.rank - b.rank);
+  WATERWAYS = D.waterways.filter((w) => !w.covered).map((w) => ({ c: w.c, p: w.p, w: Number.isFinite(w.w) && w.w > 0 ? w.w : WATER_W[w.c] || 2, bb: bboxOf(w.p) }));
   BARRIERS = D.barriers.map((b) => ({ c: b.c, p: b.p, bb: bboxOf(b.p) }));
   B = D.buildings.map((b, i) => prepBuilding(b, i));
   makeTrees();
@@ -153,7 +195,7 @@ function makeTrees() {
           if (rnd2(gx, gy, salt) > prob) continue;
           const e = gx * sp + (rnd2(gx, gy, salt + 1) - 0.5) * sp * 0.9;
           const n = y + (rnd2(gx, gy, salt + 2) - 0.5) * sp * 0.9;
-          if (occ(e, n)) continue;
+          if (!CANOPY.at(e, n) || occ(e, n)) continue;
           if (!pointInRing(e, n, a.r[0]) || a.r.some((r, i) => i > 0 && pointInRing(e, n, r))) continue;
           const t = rnd2(gx, gy, salt + 3);
           let kind = 0;
@@ -163,23 +205,8 @@ function makeTrees() {
       }
     }
   };
-  // kinds: [deciduous, conifer, birch, bush]
-  for (const a of AREAS) {
-    switch (a.k) {
-      case 'forest': scatter(a, 4.6, 0.93, [0.3, 0.55, 0.15, 0], 1, 11); break;
-      case 'scrub': scatter(a, 5.5, 0.5, [0.15, 0.1, 0.1, 0.65], 0, 12); break;
-      case 'wetland': scatter(a, 8, 0.22, [0.2, 0, 0.4, 0.4], 0, 13); break;
-      case 'park': scatter(a, 8, 0.5, [0.7, 0.12, 0.18, 0], 0, 14); break;
-      case 'cemetery': scatter(a, 8, 0.45, [0.45, 0.45, 0.1, 0], 0, 15); break;
-      case 'residential': scatter(a, 9, 0.3, [0.55, 0.15, 0.12, 0.18], 0, 16); break;
-      case 'grass': scatter(a, 10, 0.2, [0.6, 0.1, 0.2, 0.1], 0, 17); break;
-      case 'school': scatter(a, 10, 0.25, [0.7, 0.1, 0.2, 0], 0, 18); break;
-      case 'orchard': scatter(a, 6, 0.8, [0, 0, 0, 1], 0, 19); break;
-      case 'meadow': scatter(a, 30, 0.12, [0.5, 0.1, 0.2, 0.2], 0, 20); break;
-    }
-  }
-  // Lone field trees across the countryside.
-  scatter({ r: [[e0, n0, e1, n0, e1, n1, e0, n1]], bb: [e0, n0, e1, n1] }, 38, 0.1, [0.55, 0.1, 0.25, 0.1], 0, 21);
+  const holes = AREAS.filter((a) => a.k === 'forest').flatMap((a) => a.r.slice(1));
+  scatter({ r: [[e0, n0, e1, n0, e1, n1, e0, n1], ...holes], bb: bounds }, 4.6, 0.93, [0.3, 0.55, 0.15, 0], 1, 11);
   // Tree rows along roads and field edges.
   for (const row of D.treeRows) {
     let carry = 0;
@@ -198,6 +225,7 @@ function makeTrees() {
 }
 
 function makeLamps() {
+  LAMPS = [];
   for (const r of ROADS) {
     if (!(MAIN.has(r.c) || MINOR.has(r.c))) continue;
     const p = r.p;
@@ -255,6 +283,8 @@ function themeAssets(name) {
   P.paved = speck(th.paved, [shade(th.paved, 0.86)], 0.05, 34);
   P.industrial = speck(th.industrial, [shade(th.industrial, 0.86)], 0.05, 35);
   P.commercial = speck(th.commercial, [shade(th.commercial, 0.86)], 0.04, 36);
+  P.roadPaving = speck(th.path, [shade(th.path, 0.86)], 0.2, 37, 16);
+  P.roadGravel = speck(th.roadDirt, [shade(th.roadDirt, 0.86), shade(th.roadDirt, 1.12)], 0.15, 38, 16);
   // Farmland: plough lines following the iso diagonal.
   {
     const c = new OffscreenCanvas(64, 64), g = c.getContext('2d');
@@ -430,13 +460,16 @@ function paintTile(L, tx, ty, themeName) {
   const fillPath = (style) => { g.save(); screen(); g.fillStyle = style; g.fill('evenodd'); g.restore(); };
   g.beginPath(); g.rect(be0, bn0, be1 - be0, bn1 - bn0); fillPath(A.pat.bg);
 
+  g.beginPath();
+  for (const r of CANOPY.runs) if (hit(r, W)) g.rect(r[0], r[1], r[2] - r[0], r[3] - r[1]);
+  fillPath(L >= 3 ? A.pat.forest : A.pat.forestFloor);
+
   for (const ar of AREAS) {
     if (!hit(ar.bb, W)) continue;
     g.beginPath(); for (const r of ar.r) ringPath(g, r);
     const kd = ar.k;
-    if (kd === 'water') continue;
+    if (kd === 'water' || kd === 'forest') continue;
     let style = A.pat[kd] || th[kd] || th.grass;
-    if (kd === 'forest') style = L >= 3 ? A.pat.forest : A.pat.forestFloor;
     if (kd === 'pitch') style = th.pitch;
     if (kd === 'track') style = th.track;
     if (kd === 'playground') style = th.playground;
@@ -460,27 +493,40 @@ function paintTile(L, tx, ty, themeName) {
     fillPath(A.pat.water);
     g.lineWidth = Math.max(0.8, minW(1)); g.strokeStyle = th.waterEdge; g.stroke();
   }
-  // roads: casings, then fills, then markings
   const vis = ROADS.filter((r) => hit(r.bb, [W[0] - 10, W[1] - 10, W[2] + 10, W[3] + 10]) &&
     !(L >= 3 && (PATHS.has(r.c) || r.c === 'service' || r.c === 'track')) && !(L >= 5 && MINOR.has(r.c)));
-  for (const r of vis) {
-    if (PATHS.has(r.c) || r.u || r.c === 'track') continue;
-    g.strokeStyle = th.roadCase;
-    g.lineWidth = Math.max(r.w + 1.6, minW(MAIN.has(r.c) ? 2.4 : 1.6));
-    g.beginPath(); linePath(g, r.p); g.stroke();
-  }
-  for (const r of vis) {
-    const path = PATHS.has(r.c);
-    g.strokeStyle = path ? th.path : (r.u || r.c === 'track') ? th.roadDirt : MAIN.has(r.c) ? th.roadMain : th.road;
-    g.lineWidth = Math.max(r.w, minW(path ? 0.8 : MAIN.has(r.c) ? 1.4 : 1));
-    if (r.c === 'steps') g.setLineDash([0.5, 0.5]);
-    g.beginPath(); linePath(g, r.p); g.stroke();
-    if (r.c === 'steps') g.setLineDash([]);
-  }
-  if (L <= 1) {
-    g.strokeStyle = th.marking; g.lineWidth = 0.3; g.setLineDash([3, 5]); g.lineCap = 'butt';
-    for (const r of vis) if (r.c === 'primary' || r.c === 'secondary') { g.beginPath(); linePath(g, r.p); g.stroke(); }
-    g.setLineDash([]); g.lineCap = 'round';
+  for (const bridged of [false, true]) {
+    const group = vis.filter((r) => !!r.br === bridged);
+    for (const r of group) {
+      if (!bridged && (PATHS.has(r.c) || r.u || DIRT.has(r.s) || r.c === 'track' && !r.s)) continue;
+      g.strokeStyle = bridged ? th.bridge : th.roadCase;
+      g.lineWidth = Math.max(r.w + (bridged ? 2.2 : 1.6), minW(MAIN.has(r.c) ? 2.4 : 1.6));
+      g.beginPath(); linePath(g, r.p); g.stroke();
+    }
+    for (const r of group) {
+      const path = PATHS.has(r.c), dirt = r.u || DIRT.has(r.s) || r.c === 'track' && !r.s;
+      g.strokeStyle = dirt ? A.pat.roadGravel : PAVERS.has(r.s) ? A.pat.roadPaving : path && r.s !== 'asphalt' && r.s !== 'concrete' ? th.path : MAIN.has(r.c) ? th.roadMain : th.road;
+      g.lineWidth = Math.max(r.w, minW(path ? 0.8 : MAIN.has(r.c) ? 1.4 : 1));
+      if (r.c === 'steps') g.setLineDash([0.5, 0.5]);
+      g.beginPath(); linePath(g, r.p); g.stroke();
+      if (r.c === 'steps') g.setLineDash([]);
+    }
+    if (L <= 1) {
+      g.strokeStyle = th.marking; g.lineWidth = 0.3; g.setLineDash([3, 5]); g.lineCap = 'butt';
+      for (const r of group) if (r.c === 'primary' || r.c === 'secondary') { g.beginPath(); linePath(g, r.p); g.stroke(); }
+      g.setLineDash([]); g.lineCap = 'round';
+    }
+    if (bridged && L <= 2) {
+      g.strokeStyle = th.roadCase; g.lineWidth = Math.max(0.35, minW(0.65));
+      for (const r of group) for (let i = 0; i + 3 < r.p.length; i += 2) {
+        const ax = r.p[i], ay = r.p[i + 1], bx = r.p[i + 2], by = r.p[i + 3], len = Math.hypot(bx - ax, by - ay);
+        if (!len) continue;
+        const nx = -(by - ay) / len * (r.w / 2 + 0.7), ny = (bx - ax) / len * (r.w / 2 + 0.7);
+        for (const side of [-1, 1]) {
+          g.beginPath(); g.moveTo(ax + nx * side, ay + ny * side); g.lineTo(bx + nx * side, by + ny * side); g.stroke();
+        }
+      }
+    }
   }
   // hedges and fences
   if (L <= 2) for (const b of BARRIERS) {
@@ -890,10 +936,10 @@ function drawChurch(C, b) {
         poly(g, [at(0.35, t.h - 6), at(0.65, t.h - 6), at(0.65, t.h - 2), at(0.35, t.h - 2)], shade(th.window, 0.72));
         poly(g, [at(0.38, 4), at(0.62, 4), at(0.62, 9), at(0.38, 9)], shade(th.window, 0.86));
       }
-      const top = t.h + t.spire;
+      const top = t.h + t.spire, cross = t.cross;
       g.strokeStyle = th.marking === '#ece4c8' ? '#d8b04a' : shade('#d8b04a', 0.6); g.lineWidth = Math.max(1, C.k * 0.25);
-      g.beginPath(); g.moveTo(px(tc[0], tc[1]), py(tc[0], tc[1], top)); g.lineTo(px(tc[0], tc[1]), py(tc[0], tc[1], top + 2.6)); g.stroke();
-      g.beginPath(); g.moveTo(px(tc[0] - 0.7, tc[1] + 0.7), py(tc[0] - 0.7, tc[1] + 0.7, top + 1.8)); g.lineTo(px(tc[0] + 0.7, tc[1] - 0.7), py(tc[0] + 0.7, tc[1] - 0.7, top + 1.8)); g.stroke();
+      g.beginPath(); g.moveTo(px(tc[0], tc[1]), py(tc[0], tc[1], top)); g.lineTo(px(tc[0], tc[1]), py(tc[0], tc[1], top + cross)); g.stroke();
+      g.beginPath(); g.moveTo(px(tc[0] - 0.7, tc[1] + 0.7), py(tc[0] - 0.7, tc[1] + 0.7, top + cross * 0.7)); g.lineTo(px(tc[0] + 0.7, tc[1] - 0.7), py(tc[0] + 0.7, tc[1] - 0.7, top + cross * 0.7)); g.stroke();
     }
   };
   if (towerFirst) drawTower();

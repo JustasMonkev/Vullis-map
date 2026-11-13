@@ -7,7 +7,8 @@ Usage:
 
 Data © OpenStreetMap contributors, ODbL 1.0.
 """
-import argparse, glob, json, math, os, subprocess, sys, hashlib
+import argparse, glob, json, math, os, re, subprocess, sys, hashlib
+from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
 LAT0, LON0 = 55.4904281, 22.1862680          # Šilalė town node
@@ -134,7 +135,7 @@ def stitch(ways):
                     continue
                 ways.pop(i); changed = True
                 break
-        if len(cur) >= 4:
+        if len(cur) >= 4 and cur[0] == cur[-1]:
             rings.append(cur)
     return rings
 
@@ -145,6 +146,48 @@ def hsh(s):
 
 def in_box(x, y, pad=0):
     return E_MIN - pad <= x <= E_MAX + pad and N_MIN - pad <= y <= N_MAX + pad
+
+
+def metres(value):
+    if value is None or not re.fullmatch(r'\d+(?:\.\d+)?(?: m)?', value):
+        return None
+    result = float(value.split(' ')[0])
+    return result if math.isfinite(result) else None
+
+
+def enrich_existing(existing, generated, area_sources):
+    result = dict(existing)
+    result['meta'] = {**existing['meta'], 'sources': generated['meta']['sources']}
+    fields = {'buildings': ('height', 'rh', 'levels'), 'roads': ('s', 'lanes', 'w', 'br', 'u'),
+              'waterways': ('covered', 'w')}
+    for section in ('buildings', 'roads', 'waterways'):
+        if section not in existing:
+            continue
+        key = (lambda item: item['id']) if section == 'buildings' else (lambda item: tuple(item['p']))
+        by_key = {key(item): item for item in generated[section]}
+        result[section] = []
+        for item in existing[section]:
+            fresh = by_key.get(key(item))
+            if fresh is None:
+                raise ValueError(f'No exact source match for {section}: {key(item)}')
+            if section == 'buildings' and item['r'] != fresh['r']:
+                raise ValueError('Building footprint changed during enrichment')
+            retained = {field: value for field, value in item.items()
+                        if field not in fields[section] or field in fresh}
+            result[section].append({**retained, **{field: fresh[field] for field in fields[section] if field in fresh}})
+    unchanged = {json.dumps(item, sort_keys=True) for item in generated['areas']}
+    result['areas'] = []
+    for item in existing['areas']:
+        if json.dumps(item, sort_keys=True) in unchanged:
+            result['areas'].append(item)
+            continue
+        vertices = set(zip(item['r'][0][::2], item['r'][0][1::2]))
+        candidates = [fresh for fresh, source in area_sources
+                      if fresh['k'] == item['k'] and len(vertices) >= 3 and vertices <= source]
+        if len(candidates) != 1:
+            raise ValueError('Changed area requires one exact source vertex match')
+        result['areas'].append(candidates[0])
+    return result
 
 
 # ---------------------------------------------------------------- classification
@@ -229,11 +272,10 @@ def building_profile(t, poly, ctr):
             roof = 'gable'; mat = 'house' if dist > 500 else 'civic'
     else:
         h = 7.5 + seed * 2; mat = 'metal'
-    if lv:
-        try:
-            h = float(lv) * 3.0 + 0.6
-        except ValueError:
-            pass
+    if lv is not None and re.fullmatch(r'\d+(?:\.\d+)?', lv):
+        levels = metres(lv)
+        if levels is not None and levels > 0:
+            h = levels * 3.0 + 0.6
     return round(h, 1), roof, mat
 
 
@@ -245,13 +287,27 @@ def main():
     ap.add_argument('cache')
     ap.add_argument('--download', action='store_true')
     ap.add_argument('--out', default=os.path.join(os.path.dirname(__file__), '..', 'data', 'silale.json'))
+    ap.add_argument('--enrich-existing')
     args = ap.parse_args()
     if args.download:
         download(args.cache)
 
     nodes, ntags, ways, rels = {}, {}, {}, {}
+    sources = []
     for f in sorted(glob.glob(os.path.join(args.cache, '*.osm'))):
-        for el in ET.parse(f).getroot():
+        root = ET.parse(f).getroot()
+        with open(f, 'rb') as raw:
+            digest = hashlib.sha256(raw.read()).hexdigest()
+        source = {'file': os.path.basename(f), 'sha256': digest,
+                  'retrievedAt': datetime.fromtimestamp(os.path.getmtime(f), timezone.utc).isoformat()}
+        bounds = root.find('bounds')
+        if bounds is not None:
+            bbox = [float(bounds.get(k)) for k in ('minlon', 'minlat', 'maxlon', 'maxlat')]
+            source.update(bbox=bbox, url='https://api.openstreetmap.org/api/0.6/map?bbox=' + ','.join(map(str, bbox)))
+        elif len(root.findall('relation')) == 1:
+            source['url'] = 'https://api.openstreetmap.org/api/0.6/relation/' + root.find('relation').get('id') + '/full'
+        sources.append(source)
+        for el in root:
             t = {c.get('k'): c.get('v') for c in el.findall('tag')}
             i = el.get('id')
             if el.tag == 'node':
@@ -271,6 +327,7 @@ def main():
             'name': 'Šilalė', 'lat0': LAT0, 'lon0': LON0, 'mLat': M_LAT, 'mLon': M_LON,
             'bounds': [E_MIN, N_MIN, E_MAX, N_MAX],
             'attribution': 'Map data © OpenStreetMap contributors (ODbL)',
+            'sources': sources,
         },
         'areas': [], 'buildings': [], 'roads': [], 'waterways': [], 'treeRows': [], 'trees': [],
         'pois': [], 'places': [], 'streets': [], 'barriers': [],
@@ -297,6 +354,7 @@ def main():
             continue
         out['areas'].append({'k': kind, 'r': [ring_out(r, 0.6)], 'a': round(abs(area(r)))})
 
+    area_sources = []
     # --- multipolygon relations
     for rid, (mem, t) in rels.items():
         if t.get('type') != 'multipolygon':
@@ -312,8 +370,10 @@ def main():
             if len(o) < 3 or not any(in_box(x, y, 50) for x, y in o):
                 continue
             holes = [h for h in irings if len(h) >= 3 and pip(h[0], o)]
-            out['areas'].append({'k': kind, 'r': [ring_out(o, 0.6)] + [ring_out(h, 0.6) for h in holes],
-                                 'a': round(abs(area(o)))})
+            record = {'k': kind, 'r': [ring_out(o, 0.6)] + [ring_out(h, 0.6) for h in holes],
+                      'a': round(abs(area(o)))}
+            out['areas'].append(record)
+            area_sources.append((record, set(zip(ring_out(o)[::2], ring_out(o)[1::2]))))
 
     # --- buildings
     poi_nodes = [(nodes[i], t) for i, t in ntags.items() if i in nodes and 'name' in t and any(k in t for k in POI_KEYS)]
@@ -361,6 +421,12 @@ def main():
                     name = at['name']; kind = kind or next((at[k] for k in POI_KEYS if k in at), None)
                     break
         b = {'r': ring_out(r), 'h': h, 'roof': roof, 'm': mat, 'id': wid}
+        for tag, field in (('height', 'height'), ('roof:height', 'rh'), ('building:levels', 'levels')):
+            value = metres(t.get(tag))
+            if field == 'levels' and not re.fullmatch(r'\d+(?:\.\d+)?', t.get(tag, '')):
+                value = None
+            if value is not None and (value > 0 or field == 'rh'):
+                b[field] = value
         if t.get('building') not in ('yes', None):
             b['t'] = t['building']
         if name:
@@ -386,8 +452,15 @@ def main():
         hw = t.get('highway')
         if hw in ROAD_W:
             rd = {'c': hw, 'p': line_out(r, 0.3)}
-            if t.get('bridge') == 'yes':
+            if t.get('bridge') not in (None, 'no'):
                 rd['br'] = 1
+            if t.get('surface'):
+                rd['s'] = t['surface']
+            if t.get('lanes', '').isdigit() and int(t['lanes']) > 0:
+                rd['lanes'] = int(t['lanes'])
+            width = metres(t.get('width'))
+            if width is not None and width > 0:
+                rd['w'] = width
             if t.get('surface') in ('unpaved', 'gravel', 'dirt', 'ground', 'compacted', 'fine_gravel', 'sand', 'grass'):
                 rd['u'] = 1
             out['roads'].append(rd)
@@ -397,7 +470,13 @@ def main():
                 s['len'] += L; s['pts'].append((L, r))
         ww = t.get('waterway')
         if ww in WATER_W:
-            out['waterways'].append({'c': ww, 'p': line_out(r, 0.4), 'n': t.get('name')})
+            water = {'c': ww, 'p': line_out(r, 0.4), 'n': t.get('name')}
+            if t.get('tunnel') in ('yes', 'culvert'):
+                water['covered'] = 1
+            width = metres(t.get('width'))
+            if width is not None and width > 0:
+                water['w'] = width
+            out['waterways'].append(water)
         if t.get('natural') == 'tree_row':
             out['treeRows'].append(line_out(r, 0.5))
         if t.get('barrier') in ('hedge', 'fence', 'wall'):
@@ -461,6 +540,10 @@ def main():
     out['areas'].sort(key=lambda a: (order.index(a['k']), -a['a']))
     for a in out['areas']:
         del a['a']
+
+    if args.enrich_existing:
+        with open(args.enrich_existing, encoding='utf-8') as existing:
+            out = enrich_existing(json.load(existing), out, area_sources)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as f:
