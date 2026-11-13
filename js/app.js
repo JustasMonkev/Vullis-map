@@ -479,7 +479,7 @@
   // would otherwise overwrite the new zoom on the next frame.
   let userMoved = false;
   function zoomAt(sx, sy, f) {
-    anim = null; inertia = null; userMoved = true;
+    anim = null; inertia = null; userMoved = true; cancelCardSoon();
     const [X, Y] = toIso(sx, sy);
     view.s *= f; clampView();
     const [X2, Y2] = toIso(sx, sy);
@@ -600,7 +600,7 @@
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
-    anim = null; inertia = null; userMoved = true;
+    anim = null; inertia = null; userMoved = true; cancelCardSoon();
     hideHint();
     if (pointers.size === 1) {
       const now = performance.now();
@@ -729,6 +729,7 @@
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (/^(Arrow(Left|Right|Up|Down)|[aAdDwWhH])$/.test(e.key)) cancelCardSoon();
     const step = 140 / view.s;
     switch (e.key) {
       case '/': e.preventDefault(); $('q').focus(); break;
@@ -786,7 +787,18 @@
   function describe(b) {
     return KIND[b.kindName] || (b.kindName && pretty(b.kindName)) || BTYPE[b.btype] || MATK[b.m] || 'Building';
   }
+  /* Search results and "surprise me" open their card once the glide has mostly landed.
+     Only one such card can be pending, and any newer choice or interruption cancels it,
+     so a stale card can't replace what the user picked (or pull the camera back on phones). */
+  let cardTimer = 0;
+  function showCardSoon(id, ms) {
+    clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => { cardTimer = 0; showCard(id); }, ms);
+  }
+  function cancelCardSoon() { clearTimeout(cardTimer); cardTimer = 0; }
+
   function showCard(id) {
+    cancelCardSoon();
     selected = id; dirty = true;
     const b = BLD[id];
     $('card-kind').textContent = describe(b);
@@ -815,6 +827,7 @@
     revealBehindCard(b);
   }
   function hideCard() {
+    cancelCardSoon();
     if (selected >= 0) { selected = -1; dirty = true; }
     $('card').hidden = true;
     document.body.classList.remove('card-open');
@@ -871,7 +884,7 @@
     const b = pool[(Math.random() * pool.length) | 0];
     note = null;
     flyTo({ x: isoX(b.c[0], b.c[1]), y: isoY(b.c[0], b.c[1], b.h * 0.6), s: 3.2 + Math.random() * 2.5 });
-    setTimeout(() => showCard(b.i), reduceMotion ? 0 : 900);
+    showCardSoon(b.i, reduceMotion ? 0 : 900);
   }
 
   // ------------------------------------------------------------ search
@@ -934,6 +947,7 @@
     resEl.hidden = false; qEl.setAttribute('aria-expanded', 'true');
   }
   function choose(r) {
+    cancelCardSoon();
     qEl.value = r.label; resEl.hidden = true; qEl.blur(); note = null;
     $('q-clear').hidden = false;
     if (r.coord) {
@@ -946,7 +960,7 @@
     if (r.b !== undefined) {
       const b = BLD[r.b];
       flyToPoint([isoX(b.c[0], b.c[1]), isoY(b.c[0], b.c[1], b.h * 0.6)], s);
-      setTimeout(() => showCard(r.b), reduceMotion ? 0 : 700);
+      showCardSoon(r.b, reduceMotion ? 0 : 700);
     } else {
       hideCard();
       flyToPoint([isoX(r.e, r.n), isoY(r.e, r.n, 0)], s);
@@ -1050,7 +1064,7 @@
     const fromHash = readHash();
     Object.assign(view, fromHash || homeView());
     clampView();
-    window.addEventListener('hashchange', () => { const v = readHash(); if (v) flyTo(v); });
+    window.addEventListener('hashchange', () => { const v = readHash(); if (v) { cancelCardSoon(); flyTo(v); } });
     await Promise.race([atlasP, new Promise((r) => setTimeout(r, 4000))]);
     requestAnimationFrame(loop);
     // wait until the first screenful is painted (or give up after a few seconds)
